@@ -119,8 +119,11 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-miniosecret} # CHANGEME
     ports:
+      # Langfuse使用的MinIO API端口，保持不变。
       - 9090:9000
-      - 127.0.0.1:9091:9001
+      # 将MinIO管理控制台从宿主机9091改为9191，
+      # 为Milvus WebUI释放宿主机9091端口。
+      - 127.0.0.1:9191:9001
     volumes:
       - langfuse_minio_data:/data
     healthcheck:

@@ -6,6 +6,9 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+from app.core.logger import logger
+from app.observability.langfuse_monitor import trace_query
+from app.observability.rag_observability import score_query_result
 
 from app.core.logger import logger
 from app.observability.langfuse_monitor import flush_langfuse, trace_query
@@ -65,9 +68,34 @@ async def health():
 
 
 # 定义查询接口
-def run_query_graph(session_id: str, user_query: str, is_stream: bool = True):
-    logger.info(f"开始执行问答流程，session_id={session_id}，is_stream={is_stream}")
+def run_query_graph(
+        session_id: str,
+        user_query: str,
+        is_stream: bool = True
+):
+    """
+    执行一次完整的LangGraph问答流程。
 
+    该方法负责：
+    1. 创建LangGraph初始状态；
+    2. 创建Langfuse根Trace；
+    3. 挂载LangGraph CallbackHandler；
+    4. 执行完整问答图；
+    5. 写入确定性Score；
+    6. 更新任务成功或失败状态。
+
+    :param session_id: 当前会话ID。
+    :param user_query: 用户原始问题。
+    :param is_stream: 是否流式输出。
+    """
+
+    logger.info(
+        f"开始执行问答流程，"
+        f"session_id={session_id}，"
+        f"is_stream={is_stream}"
+    )
+
+    # 构造LangGraph初始状态。
     default_state = {
         "original_query": user_query,
         "session_id": session_id,
@@ -75,39 +103,107 @@ def run_query_graph(session_id: str, user_query: str, is_stream: bool = True):
     }
 
     try:
-        with trace_query(session_id, user_query, is_stream) as (observation, handler):
+        # 为当前问答创建Langfuse根Observation。
+        with trace_query(
+                session_id=session_id,
+                user_query=user_query,
+                is_stream=is_stream
+        ) as (observation, handler):
+
+            # LangGraph运行配置。
             config = {
+                # Langfuse页面中显示的图运行名称。
                 "run_name": "equipment-query-graph",
-                "tags": ["equipment-rag", "query"],
+
+                # 给LangGraph运行增加标签。
+                "tags": [
+                    "equipment-rag",
+                    "query"
+                ],
+
+                # LangGraph本次运行的业务元数据。
                 "metadata": {
                     "session_id": session_id,
                     "is_stream": is_stream
                 }
             }
 
+            # 只有启用Langfuse时才添加CallbackHandler。
+            # 关闭监控后，LangGraph仍然能够正常执行。
             if handler is not None:
                 config["callbacks"] = [handler]
 
-            final_state = query_app.invoke(default_state, config=config)
+            # 执行完整LangGraph问答流程。
+            final_state = query_app.invoke(
+                default_state,
+                config=config
+            )
 
+            # 为本次问答写入确定性评分。
+            # 必须在trace_query的with上下文内部调用，
+            # 否则无法获取当前Trace ID。
+            score_query_result(final_state)
+
+            # 更新根Observation的最终输出。
             if observation is not None:
-                observation.update(output={
-                    "status": "completed",
-                    "answer": final_state.get("answer", ""),
-                    "rewritten_query": final_state.get("rewritten_query", ""),
-                    "item_names": final_state.get("item_names", []),
-                    "retrieved_count": len(final_state.get("reranked_docs") or [])
-                })
+                observation.update(
+                    output={
+                        "status": "completed",
+                        "answer": final_state.get(
+                            "answer",
+                            ""
+                        ),
+                        "rewritten_query": final_state.get(
+                            "rewritten_query",
+                            ""
+                        ),
+                        "item_names": final_state.get(
+                            "item_names",
+                            []
+                        ),
+                        "retrieved_count": len(
+                            final_state.get(
+                                "reranked_docs"
+                            ) or []
+                        )
+                    }
+                )
 
-        update_task_status(session_id, TASK_STATUS_COMPLETED, is_stream)
-        logger.info(f"问答流程执行完成，session_id={session_id}")
+        # 更新项目内部任务状态。
+        update_task_status(
+            session_id,
+            TASK_STATUS_COMPLETED,
+            is_stream
+        )
+
+        logger.info(
+            f"问答流程执行完成，session_id={session_id}"
+        )
 
     except Exception as e:
-        logger.exception(f"问答流程执行异常，session_id={session_id}：{e}")
-        update_task_status(session_id, TASK_STATUS_FAILED, is_stream)
+        # logger.exception会同时打印错误信息和完整异常堆栈。
+        logger.exception(
+            f"问答流程执行异常，"
+            f"session_id={session_id}，"
+            f"错误={e}"
+        )
 
+        # 更新任务为失败状态。
+        update_task_status(
+            session_id,
+            TASK_STATUS_FAILED,
+            is_stream
+        )
+
+        # 流式模式下，将异常事件推送给前端。
         if is_stream:
-            push_to_session(session_id, SSEEvent.ERROR, {"error": str(e)})
+            push_to_session(
+                session_id,
+                SSEEvent.ERROR,
+                {
+                    "error": str(e)
+                }
+            )
 
 
 

@@ -131,7 +131,12 @@ def step_2_construct_prompt(state: QueryGraphState) -> str:
     question=question
   )
 
-  logger.debug(f"组装后的提示词为：{prompt}")
+  # DEBUG级别保留完整Prompt，便于本地排查。
+  # 正式环境通常不会输出DEBUG日志。
+  logger.debug(f"组装后的完整提示词：{prompt}")
+
+  # INFO日志只记录长度和参考文档数量，
+  # 避免设备手册正文长期写入普通日志。
   logger.info(
       f"回答Prompt构建完成，"
       f"字符数={len(prompt)}，"

@@ -1,135 +1,283 @@
-import sys
 import os
-from app.utils.task_utils import add_running_task,add_done_task
-from app.lm.embedding_utils import generate_embeddings
-from app.clients.milvus_utils import create_hybrid_search_requests,hybrid_search,get_milvus_client
+import sys
+
+from dotenv import find_dotenv, load_dotenv
+
+from app.clients.milvus_utils import (
+    create_hybrid_search_requests,
+    get_milvus_client,
+    hybrid_search
+)
 from app.core.logger import logger
-from dotenv import load_dotenv,find_dotenv
+from app.lm.embedding_utils import generate_embeddings
+from app.observability.rag_observability import (
+    start_rag_observation,
+    summarize_milvus_hits
+)
+from app.utils.task_utils import (
+    add_done_task,
+    add_running_task
+)
+
+
+# 加载项目.env配置。
 load_dotenv(find_dotenv())
 
 
 def node_search_embedding(state):
     """
-    核心节点函数：基于已确认商品名+改写后的用户问题，执行Milvus向量数据库混合检索
-    流程：用户问题向量化 → 构造带商品名过滤的混合搜索请求 → 执行稠密+稀疏混合检索 → 返回检索结果
-    :param state: Dict - 会话状态字典，包含上游传递的核心信息，关键字段：
-                  {
-                      "session_id": str,        # 会话唯一标识
-                      "rewritten_query": str,   # step3改写后的完整用户问题（含商品名）
-                      "item_names": list[str],  # step6已确认的标准化商品名列表
-                      "is_stream": bool/None    # 是否为流式响应，可选
-                  }
-    :return: Dict - 检索结果字典，仅包含embedding_chunks字段，供下游节点使用：
-             {
-                 "embedding_chunks": List[Dict]  # Milvus检索结果列表，无结果则为空列表
-                                                 # 每个元素为一条匹配的向量数据，含业务字段
-             }
+    使用BGE-M3和Milvus执行混合检索。
+
+    执行流程：
+    1. 获取改写后的用户问题；
+    2. 获取已确认的商品或设备名称；
+    3. 使用BGE-M3生成稠密向量和稀疏向量；
+    4. 构造Milvus过滤表达式；
+    5. 执行稠密+稀疏混合检索；
+    6. 将结果写入embedding_chunks。
+
+    :param state: LangGraph当前状态。
+    :return:
+        {
+            "embedding_chunks": 检索结果列表
+        }
     """
-    logger.info("---search_milvus 开始处理---")
-    add_running_task(state["session_id"],sys._getframe().f_code.co_name,state["is_stream"])
 
-    # 1. 从会话状态中提取核心入参，为后续检索做准备
-    query = state.get("rewritten_query")  # 提取改写后的用户问题（含商品名，独立完整）
-    item_names = state.get("item_names")  # 提取已确认的标准化商品名列表（精准过滤用）
-    
-    logger.info(f"核心入参提取: query='{query}', item_names={item_names}")
+    logger.info("---node_search_embedding 开始处理---")
 
-    # 2. 对改写后的用户问题执行向量化，生成BGEM3稠密+稀疏向量
-    logger.info(f"开始为文本获取嵌入值: {query[:50]}..." if len(query) > 50 else f"开始为“{query}”文本获取嵌入值...")
-    # 调用向量化函数，入参为列表（支持批量，此处仅单条查询）
-    # 生成与商品名匹配的语义向量，用于后续相似性检索
-    embeddings = generate_embeddings([query])
-    
-    dense_vec = embeddings.get("dense")[0]
-    sparse_vec = embeddings.get("sparse")[0]
-    # 打印稠密/稀疏向量日志，便于调试向量生成结果
-    logger.debug(f"向量生成成功: dense_dim={len(dense_vec)}, sparse_len={len(sparse_vec)}")
+    # 获取当前节点名称，供任务进度状态使用。
+    node_name = sys._getframe().f_code.co_name
 
-    # 3. 准备Milvus向量数据库连接相关配置，指定检索的集合
-    # 从环境变量中获取Milvus中存储「文本片段向量」的集合名（表名），避免硬编码
-    collection_name = os.environ.get("CHUNKS_COLLECTION")
-    logger.info(f"正在连接到 Milvus 并准备集合 '{collection_name}'...")
+    # 标记节点正在执行。
+    add_running_task(
+        state["session_id"],
+        node_name,
+        state.get("is_stream")
+    )
 
-    # 4. 构造Milvus混合搜索请求对象（核心步骤）
-    # 先通过辅助函数生成商品名过滤表达式，精准过滤检索范围
-    # 'item_name in ["苹果15", "华为P60"]'
+    # 获取改写后的问题。
+    query = (state.get("rewritten_query") or "").strip()
 
-    # 若无商品名，直接返回None（不做过滤）
-    if not item_names:
-        logger.warning("item_names 为空，跳过检索，返回空结果")
+    # 获取已经确认的商品或设备名称。
+    item_names = state.get("item_names") or []
+
+    logger.info(
+        f"向量检索参数：query={query}，item_names={item_names}"
+    )
+
+    # 问题为空时无法生成有效向量。
+    if not query:
+        logger.warning("改写后的问题为空，跳过Milvus向量检索")
+
+        # 当前节点属于正常结束，而不是系统异常。
+        add_done_task(
+            state["session_id"],
+            node_name,
+            state.get("is_stream")
+        )
+
         return {"embedding_chunks": []}
-        
-    # 对每个商品名添加双引号，拼接为Milvus支持的in语法格式
-    quoted = ", ".join(f'"{v}"' for v in item_names)
-    # 构造最终过滤表达式
-    expr = f"item_name in [{quoted}]"
-    logger.info(f"创建搜索请求过滤表达式: {expr}")
 
-    # 构造稠密+稀疏混合搜索请求，整合向量、过滤条件、搜索参数
+    # 没有确认商品或设备名称时，当前逻辑无法构建精准过滤条件。
+    if not item_names:
+        logger.warning("item_names为空，跳过Milvus向量检索")
+
+        add_done_task(
+            state["session_id"],
+            node_name,
+            state.get("is_stream")
+        )
+
+        return {"embedding_chunks": []}
+
+    # ==================== 第一阶段：BGE-M3向量化 ====================
+
+    # 创建embedding类型Observation，用于记录：
+    # 1. 向量化耗时；
+    # 2. 稠密向量维度；
+    # 3. 稀疏向量非零维度数量。
+    with start_rag_observation(
+            as_type="embedding",
+            name="bge-m3-query-embedding",
+            input_data={
+                "query": query
+            },
+            metadata={
+                "input_count": 1,
+                "usage": "query-embedding"
+            },
+            model=os.getenv("BGE_M3") or "bge-m3"
+    ) as embedding_observation:
+
+        # generate_embeddings接收文本列表。
+        embeddings = generate_embeddings([query])
+
+        # 获取稠密向量列表。
+        dense_vectors = embeddings.get("dense") or []
+
+        # 获取稀疏向量列表。
+        sparse_vectors = embeddings.get("sparse") or []
+
+        # 检查模型是否正常返回向量。
+        if not dense_vectors or not sparse_vectors:
+            raise ValueError(
+                "BGE-M3向量化失败：dense或sparse结果为空"
+            )
+
+        # 当前只有一个问题，因此取第一条向量。
+        dense_vec = dense_vectors[0]
+        sparse_vec = sparse_vectors[0]
+
+        # 将向量摘要写入Langfuse。
+        # 不上传完整向量，避免Trace过大。
+        if embedding_observation is not None:
+            embedding_observation.update(
+                output={
+                    "dense_dimension": len(dense_vec),
+                    "sparse_nonzero_count": len(sparse_vec)
+                }
+            )
+
+    logger.info(
+        f"BGE-M3向量生成完成，"
+        f"dense_dimension={len(dense_vec)}，"
+        f"sparse_nonzero_count={len(sparse_vec)}"
+    )
+
+    # ==================== 第二阶段：构造Milvus请求 ====================
+
+    # 从环境变量读取Milvus切片集合名称。
+    collection_name = os.getenv("CHUNKS_COLLECTION")
+
+    if not collection_name:
+        raise ValueError(
+            "Milvus配置错误：CHUNKS_COLLECTION环境变量为空"
+        )
+
+    # 将每一个商品或设备名称加上双引号，
+    # 拼接为Milvus支持的in过滤表达式。
+    quoted_item_names = ", ".join(
+        f'"{item_name}"'
+        for item_name in item_names
+    )
+
+    # 示例：
+    # item_name in ["RS-12数字万用表"]
+    expr = f"item_name in [{quoted_item_names}]"
+
+    logger.info(
+        f"Milvus检索集合={collection_name}，过滤条件={expr}"
+    )
+
+    # 构造稠密向量和稀疏向量的混合检索请求。
     reqs = create_hybrid_search_requests(
-        dense_vector=dense_vec,  # 取用户问题的稠密向量（单条，故取索引0）
-        sparse_vector=sparse_vec,  # 取用户问题的稀疏向量（单条，故取索引0）
-        expr=expr,  # 商品名过滤表达式，缩小检索范围（仅检索指定商品名的向量）
-        limit=10  # 底层检索返回数量（后续会再过滤为5，预留更多结果做重排序）
+        dense_vector=dense_vec,
+        sparse_vector=sparse_vec,
+        expr=expr,
+        # 每一路向量检索先召回10条候选。
+        limit=10
     )
 
-    # 5. 执行Milvus稠密+稀疏混合向量检索（核心调用）
-    logger.info("开始执行 Milvus 混合检索...")
-    client = get_milvus_client()
-    res = hybrid_search(
-        client=client,
-        collection_name=collection_name,  # 检索的目标集合名（文本片段向量集合）
-        reqs=reqs,  # 构造好的混合搜索请求对象（稠密+稀疏）
-        ranker_weights=(0.8, 0.2),  # 稠/稀疏向量评分权重配比，各占50%（提升关键词精确匹配）
-        norm_score=True,  # 开启评分归一化，将距离值转为0-1区间的相似度评分
-        limit=5,  # 最终返回的TOP5相似度最高结果
-        output_fields=["chunk_id", "content", "item_name"]  # 指定返回的业务字段
+    # ==================== 第三阶段：Milvus混合检索 ====================
+
+    with start_rag_observation(
+            as_type="retriever",
+            name="milvus-hybrid-retrieval",
+            input_data={
+                "query": query,
+                "item_names": item_names
+            },
+            metadata={
+                "collection": collection_name,
+                "filter": expr,
+                "dense_weight": 0.8,
+                "sparse_weight": 0.2,
+                "candidate_limit": 10,
+                "result_limit": 5,
+                "normalization": True
+            }
+    ) as retrieval_observation:
+
+        # 获取Milvus客户端。
+        client = get_milvus_client()
+
+        if client is None:
+            raise RuntimeError("Milvus客户端初始化失败")
+
+        # 执行混合检索。
+        res = hybrid_search(
+            client=client,
+            collection_name=collection_name,
+            reqs=reqs,
+
+            # 稠密向量权重80%，稀疏向量权重20%。
+            ranker_weights=(0.8, 0.2),
+
+            # 先对两路分数归一化，再进行加权融合。
+            norm_score=True,
+
+            # 最终返回Top5。
+            limit=5,
+
+            # content需要交给后续RRF和Reranker使用。
+            output_fields=[
+                "chunk_id",
+                "content",
+                "item_name"
+            ]
+        )
+
+        # Milvus批量检索结果的第一层对应当前第一条查询。
+        hits = res[0] if res and len(res) > 0 else []
+
+        # 将检索结果摘要写入Langfuse。
+        if retrieval_observation is not None:
+            retrieval_observation.update(
+                output={
+                    "hit_count": len(hits),
+                    "hits": summarize_milvus_hits(hits)
+                }
+            )
+
+    logger.info(
+        f"Milvus混合检索完成，召回数量={len(hits)}"
     )
 
-    # 打印节点处理成功日志，输出原始检索结果，便于调试
-    hit_count = len(res[0]) if res and len(res) > 0 else 0
-    logger.info(f"节点 search_embedding 处理成功，检索到 {hit_count} 条相关片段")
-    if hit_count > 0:
-        logger.debug(f"Top1 检索结果示例: {res[0][0]}")
-        
-    # 标记当前任务完成，更新任务状态
-    add_done_task(state["session_id"], sys._getframe().f_code.co_name, state.get("is_stream"))
+    # 标记节点执行完成。
+    add_done_task(
+        state["session_id"],
+        node_name,
+        state.get("is_stream")
+    )
 
-    # 6. 构造并返回结果：若检索结果非空，取res[0]（适配Milvus批量搜索格式），否则返回空列表
-    # res[0]为当前单条查询的检索结果，包含TOP5匹配的向量数据及业务字段
-    return {"embedding_chunks": res[0] if res else []}
+    return {
+        "embedding_chunks": hits
+    }
 
 
 if __name__ == "__main__":
-    # 模拟测试数据
+    """
+    当前文件的本地测试入口。
+    直接运行时，会使用模拟状态测试向量检索节点。
+    """
+
     test_state = {
         "session_id": "test_search_embedding_001",
-        "rewritten_query": "HAK 180 烫金机使用说明",  # 模拟改写后的查询
-        "item_names": ["HAK 180 烫金机"],  # 模拟已确认的商品名
+        "rewritten_query": "RS-12数字万用表如何测量直流电压",
+        "item_names": ["RS-PRORS-12数字万用表"],
         "is_stream": False
     }
 
-    print("\n>>> 开始测试 node_search_embedding 节点...")
     try:
-        # 执行节点函数
         result = node_search_embedding(test_state)
-        logger.info(f"检索结果汇总：{result}")
-        # 验证结果
-        chunks = result.get("embedding_chunks", [])
-        print(f"\n>>> 测试完成！检索到 {len(chunks)} 条结果")
-        
-        if chunks:
-            print("\n>>> Top 1 结果详情:")
-            top1 = chunks[0]
-            # 打印关键字段（注意：entity字段可能包含具体业务数据）
-            print(f"ID: {top1.get('id')}")
-            print(f"Distance: {top1.get('distance')}")
-            entity = top1.get('entity', {})
-            print(f"Item Name: {entity.get('item_name')}")
-            print(f"Content Preview: {entity.get('content', '')[:100]}...")
-        else:
-            print("\n>>> 警告：未检索到任何结果，请检查 Milvus 数据或 item_names 是否匹配")
-            
-    except Exception as e:
-        logger.error(f"测试运行失败: {e}", exc_info=True)
 
+        chunks = result.get("embedding_chunks") or []
+
+        logger.info(
+            f"本地测试完成，检索结果数量={len(chunks)}"
+        )
+
+    except Exception as e:
+        logger.exception(
+            f"node_search_embedding本地测试失败：{e}"
+        )

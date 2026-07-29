@@ -1,6 +1,10 @@
 from app.utils.task_utils import *
 from app.lm.reranker_utils import get_reranker_model
 from app.core.logger import logger
+from app.observability.rag_observability import (
+    start_rag_observation,
+    summarize_rerank_docs
+)
 import sys
 
 # -----------------------------
@@ -244,24 +248,103 @@ def step_3_topk(scored_docs):
 
 
 def node_rerank(state):
-  """
-  Rerank节点
-  对检索到的文档进行重新排序，提高相关性
-  """
-  logger.info("---Rerank (重排序) 节点开始处理---")
-  add_running_task(state["session_id"], sys._getframe().f_code.co_name, state.get("is_stream"))
+    """
+    执行BGE Reranker重排序。
 
-  # 阶段一：合并文档
-  doc_items = step_1_merge_docs(state)
-  # 阶段二：对文档进行重排序
-  scored_docs = step_2_rerank_docs(state, doc_items)
-  # 阶段三：动态 TopK
-  topk_docs = step_3_topk(scored_docs)
-  
-  logger.info(f"Rerank 节点处理结束, 最终输出 {len(topk_docs)} 条文档")
+    执行步骤：
+    1. 合并RRF本地结果和联网结果；
+    2. 使用BGE Reranker计算相关性分数；
+    3. 按分数降序排列；
+    4. 根据分数断崖动态选择TopK；
+    5. 将重排摘要上传到Langfuse。
 
-  add_done_task(state['session_id'], sys._getframe().f_code.co_name, state.get("is_stream"))
-  return {"reranked_docs": topk_docs}
+    :param state: 当前LangGraph状态。
+    :return:
+        {
+            "reranked_docs": 最终重排文档列表
+        }
+    """
+
+    logger.info("---node_rerank 开始处理---")
+
+    # 获取当前节点名称。
+    node_name = sys._getframe().f_code.co_name
+
+    # 标记节点正在执行。
+    add_running_task(
+        state["session_id"],
+        node_name,
+        state.get("is_stream")
+    )
+
+    # 优先使用改写后的问题。
+    # 当改写结果不存在时，回退到用户原始问题。
+    question = (
+        state.get("rewritten_query")
+        or state.get("original_query")
+        or ""
+    ).strip()
+
+    # 合并RRF结果和联网检索结果，
+    # 转换成Reranker可以统一处理的结构。
+    doc_items = step_1_merge_docs(state)
+
+    # 创建retriever类型Observation。
+    # 虽然Reranker不负责第一阶段召回，但仍属于RAG检索排序链路。
+    with start_rag_observation(
+            as_type="retriever",
+            name="bge-reranker",
+            input_data={
+                "query": question,
+                "candidate_count": len(doc_items)
+            },
+            metadata={
+                "max_topk": RERANK_MAX_TOPK,
+                "min_topk": RERANK_MIN_TOPK,
+                "gap_ratio": RERANK_GAP_RATIO,
+                "gap_abs": RERANK_GAP_ABS
+            }
+    ) as rerank_observation:
+
+        # 使用BGE Reranker为每一条候选文档打分。
+        scored_docs = step_2_rerank_docs(
+            state,
+            doc_items
+        )
+
+        # 根据分数断崖执行动态TopK截断。
+        topk_docs = step_3_topk(scored_docs)
+
+        # 将重排结果摘要写入Langfuse。
+        # 不上传完整手册正文，只上传标识和分数。
+        if rerank_observation is not None:
+            rerank_observation.update(
+                output={
+                    "candidate_count": len(doc_items),
+                    "scored_count": len(scored_docs),
+                    "selected_count": len(topk_docs),
+                    "documents": summarize_rerank_docs(
+                        topk_docs
+                    )
+                }
+            )
+
+    logger.info(
+        f"Reranker执行完成，"
+        f"输入文档数={len(doc_items)}，"
+        f"最终保留文档数={len(topk_docs)}"
+    )
+
+    # 标记当前节点执行完成。
+    add_done_task(
+        state["session_id"],
+        node_name,
+        state.get("is_stream")
+    )
+
+    return {
+        "reranked_docs": topk_docs
+    }
 
 
 if __name__ == "__main__":
