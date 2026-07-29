@@ -1,14 +1,11 @@
-from FlagEmbedding import FlagReranker
-from app.conf.reranker_config import reranker_config
+from app.model.reranker.factory import get_reranker
 
-_reranker_model = None
 
 def get_reranker_model():
-    global _reranker_model  
-    if _reranker_model is None:
-        _reranker_model= FlagReranker(
-            model_name_or_path=reranker_config.bge_reranker_large,
-            device=reranker_config.bge_reranker_device,
-            use_fp16=reranker_config.bge_reranker_fp16
-        )
-    return _reranker_model
+    """
+    兼容原有业务代码的Reranker获取方法。
+
+    原来的node_rerank不需要立即修改，内部已经切换到新Provider工厂。
+    """
+
+    return get_reranker()
