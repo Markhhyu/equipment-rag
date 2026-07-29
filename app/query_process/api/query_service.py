@@ -5,6 +5,10 @@ from fastapi import FastAPI, BackgroundTasks, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
+
+from app.core.logger import logger
+from app.observability.langfuse_monitor import flush_langfuse, trace_query
 
 from app.utils.task_utils import *
 from app.utils.sse_utils import create_sse_queue, SSEEvent, sse_generator
@@ -16,8 +20,13 @@ from app.query_process.agent.main_graph import query_app
 
 
 # 定义fastapi对象
-app = FastAPI(title="query service",description="掌柜智库查询服务！")
-# 跨域问题解决
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    yield
+    flush_langfuse()
+
+
+app = FastAPI(title="query service", description="设备文档Agent查询服务", lifespan=lifespan)# 跨域问题解决
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -57,17 +66,46 @@ async def health():
 
 # 定义查询接口
 def run_query_graph(session_id: str, user_query: str, is_stream: bool = True):
-    print(f"开始流程图处理...{session_id} {user_query} {is_stream}")
+    logger.info(f"开始执行问答流程，session_id={session_id}，is_stream={is_stream}")
 
-    default_state = {"original_query": user_query, "session_id": session_id, "is_stream": is_stream}
+    default_state = {
+        "original_query": user_query,
+        "session_id": session_id,
+        "is_stream": is_stream
+    }
+
     try:
-        # 后期运行
-        query_app.invoke(default_state)
-        # 整体任务就更新完了！ 接下来就是数据的更新了！
+        with trace_query(session_id, user_query, is_stream) as (observation, handler):
+            config = {
+                "run_name": "equipment-query-graph",
+                "tags": ["equipment-rag", "query"],
+                "metadata": {
+                    "session_id": session_id,
+                    "is_stream": is_stream
+                }
+            }
+
+            if handler is not None:
+                config["callbacks"] = [handler]
+
+            final_state = query_app.invoke(default_state, config=config)
+
+            if observation is not None:
+                observation.update(output={
+                    "status": "completed",
+                    "answer": final_state.get("answer", ""),
+                    "rewritten_query": final_state.get("rewritten_query", ""),
+                    "item_names": final_state.get("item_names", []),
+                    "retrieved_count": len(final_state.get("reranked_docs") or [])
+                })
+
         update_task_status(session_id, TASK_STATUS_COMPLETED, is_stream)
+        logger.info(f"问答流程执行完成，session_id={session_id}")
+
     except Exception as e:
-        print(f"流程执行异常: {e}")
+        logger.exception(f"问答流程执行异常，session_id={session_id}：{e}")
         update_task_status(session_id, TASK_STATUS_FAILED, is_stream)
+
         if is_stream:
             push_to_session(session_id, SSEEvent.ERROR, {"error": str(e)})
 

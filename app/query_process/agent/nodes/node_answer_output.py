@@ -131,8 +131,12 @@ def step_2_construct_prompt(state: QueryGraphState) -> str:
     question=question
   )
 
-  logger.info(f"组装后的提示词为：{prompt}")
-
+  logger.debug(f"组装后的提示词为：{prompt}")
+  logger.info(
+      f"回答Prompt构建完成，"
+      f"字符数={len(prompt)}，"
+      f"参考文档数={len(reranked_docs)}"
+  )
   return prompt
 
 
