@@ -6,8 +6,6 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from app.core.logger import logger
-from app.observability.langfuse_monitor import trace_query
 from app.observability.rag_observability import score_query_result
 
 from app.core.logger import logger
@@ -17,6 +15,16 @@ from app.utils.task_utils import *
 from app.utils.sse_utils import create_sse_queue, SSEEvent, sse_generator
 from app.clients.mongo_history_utils import *
 from app.query_process.agent.main_graph import query_app
+
+# Literal用于限制反馈值只能是0或1。
+from typing import Literal, Optional
+
+# Langfuse监控和反馈相关工具。
+from app.observability.langfuse_monitor import (
+    create_query_trace_id,
+    submit_trace_feedback,
+    trace_query
+)
 
 # 后续导入启动图对象
 #from app.query_process.main_graph import query_app
@@ -56,6 +64,34 @@ class QueryRequest(BaseModel):
     session_id: str = Field(None, description="会话ID")
     is_stream: bool = Field(False, description="是否流式返回")
 
+class FeedbackRequest(BaseModel):
+    """
+    用户反馈请求数据结构。
+
+    前端点赞时发送value=1；
+    前端点踩时发送value=0。
+    """
+
+    # 本轮回答对应的Langfuse Trace ID。
+    trace_id: str = Field(
+        ...,
+        min_length=32,
+        max_length=32,
+        description="Langfuse Trace ID"
+    )
+
+    # Literal限制JSON中的value只能是0或者1。
+    value: Literal[0, 1] = Field(
+        ...,
+        description="1表示点赞，0表示点踩"
+    )
+
+    # 用户可选的补充说明。
+    comment: Optional[str] = Field(
+        default=None,
+        max_length=500,
+        description="用户反馈说明"
+    )
 
 
 # 证明服务器启动即可
@@ -71,27 +107,22 @@ async def health():
 def run_query_graph(
         session_id: str,
         user_query: str,
-        is_stream: bool = True
+        is_stream: bool,
+        trace_id: str
 ):
     """
-    执行一次完整的LangGraph问答流程。
+    执行一次完整问答流程。
 
-    该方法负责：
-    1. 创建LangGraph初始状态；
-    2. 创建Langfuse根Trace；
-    3. 挂载LangGraph CallbackHandler；
-    4. 执行完整问答图；
-    5. 写入确定性Score；
-    6. 更新任务成功或失败状态。
-
-    :param session_id: 当前会话ID。
+    :param session_id: 多轮会话ID。
     :param user_query: 用户原始问题。
-    :param is_stream: 是否流式输出。
+    :param is_stream: 是否流式返回。
+    :param trace_id: 当前这轮问答对应的Langfuse Trace ID。
     """
 
     logger.info(
         f"开始执行问答流程，"
         f"session_id={session_id}，"
+        f"trace_id={trace_id}，"
         f"is_stream={is_stream}"
     )
 
@@ -103,48 +134,42 @@ def run_query_graph(
     }
 
     try:
-        # 为当前问答创建Langfuse根Observation。
+        # 创建本轮问答的Langfuse根Trace。
         with trace_query(
                 session_id=session_id,
                 user_query=user_query,
-                is_stream=is_stream
+                is_stream=is_stream,
+                trace_id=trace_id
         ) as (observation, handler):
 
             # LangGraph运行配置。
             config = {
-                # Langfuse页面中显示的图运行名称。
                 "run_name": "equipment-query-graph",
-
-                # 给LangGraph运行增加标签。
                 "tags": [
                     "equipment-rag",
                     "query"
                 ],
-
-                # LangGraph本次运行的业务元数据。
                 "metadata": {
                     "session_id": session_id,
+                    "trace_id": trace_id,
                     "is_stream": is_stream
                 }
             }
 
-            # 只有启用Langfuse时才添加CallbackHandler。
-            # 关闭监控后，LangGraph仍然能够正常执行。
+            # Langfuse开启时添加自动追踪回调。
             if handler is not None:
                 config["callbacks"] = [handler]
 
-            # 执行完整LangGraph问答流程。
+            # 执行完整LangGraph。
             final_state = query_app.invoke(
                 default_state,
                 config=config
             )
 
-            # 为本次问答写入确定性评分。
-            # 必须在trace_query的with上下文内部调用，
-            # 否则无法获取当前Trace ID。
+            # 写入自动基础评分。
             score_query_result(final_state)
 
-            # 更新根Observation的最终输出。
+            # 更新根Observation最终输出。
             if observation is not None:
                 observation.update(
                     output={
@@ -169,7 +194,15 @@ def run_query_graph(
                     }
                 )
 
-        # 更新项目内部任务状态。
+        # 将Trace ID保存到当前任务结果。
+        # 后面扩展/status接口时也可以直接读取。
+        set_task_result(
+            session_id,
+            "trace_id",
+            trace_id
+        )
+
+        # 更新任务状态为完成。
         update_task_status(
             session_id,
             TASK_STATUS_COMPLETED,
@@ -177,34 +210,36 @@ def run_query_graph(
         )
 
         logger.info(
-            f"问答流程执行完成，session_id={session_id}"
+            f"问答流程执行完成，"
+            f"session_id={session_id}，"
+            f"trace_id={trace_id}"
         )
 
     except Exception as e:
-        # logger.exception会同时打印错误信息和完整异常堆栈。
         logger.exception(
             f"问答流程执行异常，"
             f"session_id={session_id}，"
+            f"trace_id={trace_id}，"
             f"错误={e}"
         )
 
-        # 更新任务为失败状态。
+        # 更新任务状态为失败。
         update_task_status(
             session_id,
             TASK_STATUS_FAILED,
             is_stream
         )
 
-        # 流式模式下，将异常事件推送给前端。
+        # 流式问答发生异常时，将错误推送给页面。
         if is_stream:
             push_to_session(
                 session_id,
                 SSEEvent.ERROR,
                 {
-                    "error": str(e)
+                    "error": str(e),
+                    "trace_id": trace_id
                 }
             )
-
 
 
 @app.post("/query")
@@ -220,6 +255,9 @@ async def query(background_tasks: BackgroundTasks, request: QueryRequest):
     """
     user_query = request.query
     session_id = request.session_id if request.session_id else str(uuid.uuid4())
+    # 每一次提问都生成独立Trace ID。
+    # session_id代表整个对话，trace_id代表当前这一轮问答。
+    trace_id = create_query_trace_id()
 
     # 处理是不是流式返回结果
     is_stream = request.is_stream
@@ -235,24 +273,97 @@ async def query(background_tasks: BackgroundTasks, request: QueryRequest):
     if is_stream:
         # 如果是流式，则返回一个流式响应，过程不断地推送
         # 运行执行图对象方法
-        background_tasks.add_task(run_query_graph, session_id,user_query,is_stream)
-        # 返回结果
+        # 后台执行LangGraph时，把预先生成的Trace ID一起传入。
+        background_tasks.add_task(
+            run_query_graph,
+            session_id,
+            user_query,
+            is_stream,
+            trace_id
+        )        # 返回结果
         print("开始处理结果....")
         return {
-            "message":"结果正在处理中...",
-            "session_id":session_id
+            "message": "结果正在处理中...",
+            "session_id": session_id,
+
+            # 前端收到Trace ID后，在回答完成时显示反馈按钮。
+            "trace_id": trace_id
         }
     else:
         # 同步运行
-        run_query_graph(session_id, user_query, is_stream)
+        run_query_graph(
+            session_id,
+            user_query,
+            is_stream,
+            trace_id
+        )
         answer = get_task_result(session_id,"answer","")
         return {
-            "message":"处理完成！",
-            "session_id":session_id,
-            "answer":answer,
-            "done_list":[]
+            "message": "处理完成！",
+            "session_id": session_id,
+            "trace_id": trace_id,
+            "answer": answer,
+            "done_list": []
         }
 
+@app.post("/feedback")
+async def submit_feedback(request: FeedbackRequest):
+    """
+    接收聊天页面的点赞或点踩。
+
+    请求示例：
+    {
+        "trace_id": "32位Trace ID",
+        "value": 1,
+        "comment": "回答很有帮助"
+    }
+    """
+
+    try:
+        # 将反馈写入Langfuse Score。
+        submit_trace_feedback(
+            trace_id=request.trace_id,
+            value=request.value,
+            comment=request.comment or ""
+        )
+
+        logger.info(
+            f"用户反馈提交成功，"
+            f"trace_id={request.trace_id}，"
+            f"value={request.value}"
+        )
+
+        return {
+            "message": "反馈已记录",
+            "trace_id": request.trace_id,
+            "value": request.value
+        }
+
+    except ValueError as e:
+        # 参数格式错误时返回400。
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
+
+    except RuntimeError as e:
+        # Langfuse未启用或不可用时返回503。
+        raise HTTPException(
+            status_code=503,
+            detail=str(e)
+        )
+
+    except Exception as e:
+        logger.exception(
+            f"用户反馈提交失败，"
+            f"trace_id={request.trace_id}，"
+            f"错误={e}"
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail="用户反馈提交失败"
+        )
 
 
 @app.get("/stream/{session_id}")
