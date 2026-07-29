@@ -95,11 +95,14 @@ def find_image_in_md(md_content: str, image_filename: str, context_len: int = 10
 # 步骤2：扫描图片文件夹，筛选MD中实际引用的支持格式图片
 def step_2_scan_images(md_content: str, images_dir: Path) -> List[Tuple[str, str, Tuple[str, str]]]:
     """
-    扫描图片文件夹，过滤出「支持格式+MD中实际引用」的图片，组装处理元数据
-    :param md_content: MD文件完整内容
-    :param images_dir: 图片文件夹路径对象
-    :return: 待处理图片列表，每个元素为(图片文件名, 图片完整路径, 图片上下文)元组
+    扫描MinerU输出的图片目录，筛选Markdown实际引用的图片。
     """
+
+    # 纯文本PDF可能不会生成images目录，此时直接跳过图片处理。
+    if not images_dir.exists() or not images_dir.is_dir():
+        logger.info(f"MinerU结果中不存在图片目录，跳过图片处理：{images_dir}")
+        return []
+
     targets = []
     # 遍历图片文件夹所有文件
     # 遍历图片文件夹所有文件
