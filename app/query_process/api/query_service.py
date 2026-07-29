@@ -127,9 +127,11 @@ def run_query_graph(
     )
 
     # 构造LangGraph初始状态。
+    # trace_id放入State后，后续回答节点可以将它保存到MongoDB。
     default_state = {
         "original_query": user_query,
         "session_id": session_id,
+        "trace_id": trace_id,
         "is_stream": is_stream
     }
 
@@ -321,11 +323,14 @@ async def submit_feedback(request: FeedbackRequest):
 
     try:
         # 将反馈写入Langfuse Score。
-        submit_trace_feedback(
-            trace_id=request.trace_id,
-            value=request.value,
-            comment=request.comment or ""
-        )
+        # 第一份反馈写入Langfuse，用于质量统计和筛选。
+        submit_trace_feedback(request.trace_id, request.value, request.comment or "")
+
+        # 第二份反馈写入MongoDB，用于页面刷新后恢复按钮状态。
+        matched_count = update_message_feedback(request.trace_id, request.value, request.comment or "")
+
+        if matched_count == 0:
+            logger.warning(f"Langfuse反馈已保存，但MongoDB未找到对应回答，trace_id={request.trace_id}")
 
         logger.info(
             f"用户反馈提交成功，"
@@ -336,7 +341,8 @@ async def submit_feedback(request: FeedbackRequest):
         return {
             "message": "反馈已记录",
             "trace_id": request.trace_id,
-            "value": request.value
+            "value": request.value,
+            "history_updated": matched_count > 0
         }
 
     except ValueError as e:
@@ -399,6 +405,10 @@ async def history(session_id: str, limit: int = 50):
                 "text": r.get("text", ""),
                 "rewritten_query": r.get("rewritten_query", ""),
                 "item_names": r.get("item_names", []),
+                "image_urls": r.get("image_urls", []),
+                "trace_id": r.get("trace_id", ""),
+                "feedback_value": r.get("feedback_value"),
+                "feedback_comment": r.get("feedback_comment", ""),
                 "ts": r.get("ts")
             })
         return {"session_id": session_id, "items": items}

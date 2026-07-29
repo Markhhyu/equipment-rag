@@ -685,23 +685,40 @@
         scrollToBottom();
     }
 
-    function addBotMsgWithTime(text, ts, imageUrls) {
+    /**
+     * 渲染一条历史助手消息。
+     *
+     * @param {string} text 回答内容。
+     * @param {number} ts 回答时间戳。
+     * @param {Array} imageUrls 回答关联图片。
+     * @param {string} traceId 回答对应的Langfuse Trace ID。
+     * @param {number|null} feedbackValue 已保存的反馈值，1点赞、0点踩。
+     */
+    function addBotMsgWithTime(text, ts, imageUrls, traceId, feedbackValue) {
         const id = 'bot-his-' + Math.random().toString(36).slice(2);
+
         const html = `
-        <div class="msg bot" id="${id}">
-          <div class="avatar bot">掌柜智库</div>
-          <div>
-            <div class="bubble"><div class="answer"></div></div>
-            <div class="meta">${formatTime(ts)}</div>
-          </div>
-        </div>
-      `;
+    <div class="msg bot" id="${id}">
+      <div class="avatar bot">掌柜智库</div>
+      <div>
+        <div class="bubble"><div class="answer"></div></div>
+        <div class="meta">${formatTime(ts)}</div>
+      </div>
+    </div>
+  `;
+
         chatEl.insertAdjacentHTML('beforeend', html);
-        const el = document.getElementById(id);
-        if (el) {
-            const answerEl = el.querySelector('.answer');
+
+        const botMsgEl = document.getElementById(id);
+
+        if (botMsgEl) {
+            const answerEl = botMsgEl.querySelector('.answer');
             renderAnswerWithImages(answerEl, text || '', imageUrls || []);
+
+            // 旧记录没有Trace ID时不会显示反馈按钮。
+            addFeedbackActions(botMsgEl, traceId || '', feedbackValue);
         }
+
         scrollToBottom();
     }
 
@@ -824,35 +841,28 @@
 
 
     /**
-     * 在机器人回答下方增加点赞和点踩按钮。
+     * 在助手回答下方显示点赞和点踩。
      *
-     * 同一个回答只创建一次反馈区域。
-     *
-     * @param {HTMLElement} botMsgEl 当前机器人消息DOM。
+     * @param {HTMLElement} botMsgEl 当前助手消息元素。
      * @param {string} traceId 当前回答对应的Trace ID。
+     * @param {number|null} selectedValue 历史反馈值，1点赞、0点踩。
      */
-    function addFeedbackActions(botMsgEl, traceId) {
-        // 没有Trace ID时无法关联Langfuse，因此不显示按钮。
+    function addFeedbackActions(botMsgEl, traceId, selectedValue = null) {
+        // 没有Trace ID时无法关联Langfuse，因此不创建反馈区域。
         if (!botMsgEl || !traceId) return;
 
-        // 防止final和final_answer事件重复创建按钮。
+        // 防止final和final_answer重复创建反馈按钮。
         if (botMsgEl.dataset.feedbackCreated === 'true') return;
 
-        // 标记当前消息已经创建反馈区域。
         botMsgEl.dataset.feedbackCreated = 'true';
         botMsgEl.dataset.traceId = traceId;
 
-        // 获取机器人消息的内容容器。
         const bubble = botMsgEl.querySelector('.bubble');
         if (!bubble || !bubble.parentElement) return;
 
-        const contentWrap = bubble.parentElement;
-
-        // 创建反馈区域。
         const feedbackEl = document.createElement('div');
         feedbackEl.className = 'feedback-actions';
 
-        // 创建点赞按钮。
         const likeBtn = document.createElement('button');
         likeBtn.type = 'button';
         likeBtn.className = 'feedback-btn';
@@ -860,7 +870,6 @@
         likeBtn.title = '回答有帮助';
         likeBtn.textContent = '👍';
 
-        // 创建点踩按钮。
         const dislikeBtn = document.createElement('button');
         dislikeBtn.type = 'button';
         dislikeBtn.className = 'feedback-btn';
@@ -868,7 +877,6 @@
         dislikeBtn.title = '回答需要改进';
         dislikeBtn.textContent = '👎';
 
-        // 创建反馈状态文字。
         const statusEl = document.createElement('span');
         statusEl.className = 'feedback-status';
         statusEl.textContent = '这个回答有帮助吗？';
@@ -876,86 +884,53 @@
         const buttons = [likeBtn, dislikeBtn];
 
         /**
-         * 统一处理点赞或点踩。
-         *
-         * @param {number} value 1表示点赞，0表示点踩。
+         * 根据反馈值更新按钮高亮。
          */
-        const handleFeedback = async (value) => {
+        const applyActiveState = value => {
+            buttons.forEach(button => {
+                button.classList.toggle('active', Number(button.dataset.value) === value);
+            });
+        };
+
+        /**
+         * 提交点赞或点踩。
+         */
+        const handleFeedback = async value => {
             let comment = '';
 
-            // 点踩时允许用户补充原因。
-            // 用户取消输入也可以正常提交点踩。
-            if (value === 0) {
-                comment = (
-                    window.prompt(
-                        '请说明回答存在的问题，可直接留空：',
-                        ''
-                    ) || ''
-                ).trim();
-            }
+            // 点踩时允许补充原因，留空也可以提交。
+            if (value === 0) comment = (window.prompt('请说明回答存在的问题，可直接留空：', '') || '').trim();
 
-            // 请求期间禁用两个按钮，防止重复点击。
-            buttons.forEach(button => {
-                button.disabled = true;
-            });
-
+            buttons.forEach(button => button.disabled = true);
             statusEl.textContent = '正在提交反馈...';
 
             try {
-                await submitFeedback(
-                    traceId,
-                    value,
-                    comment
-                );
+                await submitFeedback(traceId, value, comment);
 
-                // 提交成功后重新启用按钮。
-                // 用户可以把点踩修改为点赞，反之亦然。
-                buttons.forEach(button => {
-                    button.disabled = false;
-
-                    // 根据当前反馈值控制高亮。
-                    button.classList.toggle(
-                        'active',
-                        Number(button.dataset.value) === value
-                    );
-                });
-
-                statusEl.textContent = (
-                    value === 1
-                        ? '已记录：回答有帮助'
-                        : '已记录：回答需要改进'
-                );
-
+                buttons.forEach(button => button.disabled = false);
+                applyActiveState(value);
+                statusEl.textContent = value === 1 ? '已记录：回答有帮助' : '已记录：回答需要改进';
             } catch (error) {
-                // 提交失败后恢复按钮。
-                buttons.forEach(button => {
-                    button.disabled = false;
-                });
-
+                buttons.forEach(button => button.disabled = false);
                 statusEl.textContent = '反馈提交失败';
-
-                console.error(
-                    '提交用户反馈失败：',
-                    error
-                );
+                console.error('提交用户反馈失败：', error);
             }
         };
 
-        // 绑定点赞事件。
-        likeBtn.addEventListener('click', () => {
-            handleFeedback(1);
-        });
-
-        // 绑定点踩事件。
-        dislikeBtn.addEventListener('click', () => {
-            handleFeedback(0);
-        });
+        likeBtn.addEventListener('click', () => handleFeedback(1));
+        dislikeBtn.addEventListener('click', () => handleFeedback(0));
 
         feedbackEl.appendChild(likeBtn);
         feedbackEl.appendChild(dislikeBtn);
         feedbackEl.appendChild(statusEl);
+        bubble.parentElement.appendChild(feedbackEl);
 
-        contentWrap.appendChild(feedbackEl);
+        // 注意不能写成if(selectedValue)，因为点踩值0会被判断为false。
+        if (selectedValue === 0 || selectedValue === 1) {
+            const value = Number(selectedValue);
+            applyActiveState(value);
+            statusEl.textContent = value === 1 ? '已记录：回答有帮助' : '已记录：回答需要改进';
+        }
     }
 
     async function apiHealth() {
@@ -982,7 +957,10 @@
                 if (item.role === 'user') {
                     addUserMsgWithTime(item.text || '', item.ts);
                 } else {
-                    addBotMsgWithTime(item.text || '', item.ts, item.image_urls || []);
+                    addBotMsgWithTime(
+                        item.text || '', item.ts, item.image_urls || [],
+                        item.trace_id || '', item.feedback_value
+                    );
                 }
             }
             scrollToBottom();

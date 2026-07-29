@@ -264,31 +264,33 @@ def _extract_images_from_docs(docs):
     return images
 
 
-def step_4_write_history(state: QueryGraphState, image_urls = None) -> QueryGraphState:
-  """
-  阶段四：把本轮答案写入 MongoDB history。
-  利用 utils/mongo_history_utils.py 中的 save_chat_messages 方法。
-  """
-  session_id = state.get("session_id", "default")
-  answer = (state.get("answer") or "").strip()
-  item_names = state.get("item_names") or []
+def step_4_write_history(state: QueryGraphState, image_urls=None) -> QueryGraphState:
+    """
+    将本轮助手回答写入MongoDB。
 
-  try:
-    if answer:
-       save_chat_message(
-        session_id=session_id,
-        role="assistant",
-        text=answer,
-        rewritten_query="",
-        item_names=item_names,
-        image_urls=image_urls,
-        message_id=None
-      )
-  except Exception as e:
-    # 写历史失败不应影响主链路
-    logger.error(f"写入Mongo历史记录失败: {e}")
+    MongoDB记录会保存：
+    1. 回答内容；
+    2. 设备名称；
+    3. 关联图片；
+    4. Langfuse Trace ID。
+    """
 
-  return state
+    session_id = state.get("session_id", "default")
+    trace_id = state.get("trace_id", "")
+    answer = (state.get("answer") or "").strip()
+    item_names = state.get("item_names") or []
+
+    try:
+        if answer:
+            save_chat_message(
+                session_id=session_id, role="assistant", text=answer, rewritten_query="",
+                item_names=item_names, image_urls=image_urls, message_id=None, trace_id=trace_id
+            )
+    except Exception as e:
+        # MongoDB历史保存失败不能中断整个问答流程。
+        logger.error(f"写入MongoDB历史记录失败：{e}", exc_info=True)
+
+    return state
 
 
 def node_answer_output(state: QueryGraphState) -> QueryGraphState:
@@ -334,15 +336,17 @@ def node_answer_output(state: QueryGraphState) -> QueryGraphState:
   # 阶段五: 流式输出结束，发送 final 事件 [最后兜底，确保图片都能争取渲染和结束]
   logger.info(f"---发送 final 事件---图片为：{image_urls}")
   if state.get("is_stream"):
-    push_to_session(
-        state['session_id'],
-        SSEEvent.FINAL,
-        {
-            "answer": state["answer"],
-            "status": "completed",
-            "image_urls": image_urls  # 发送图片URL给前端
-        }
-    )
+      # 最终事件同时返回Trace ID，方便前端将反馈关联到本轮回答。
+      push_to_session(
+          state["session_id"],
+          SSEEvent.FINAL,
+          {
+              "answer": state["answer"],
+              "status": "completed",
+              "image_urls": image_urls,
+              "trace_id": state.get("trace_id", "")
+          }
+      )
   
   logger.info("---node_answer_output 节点处理结束---")
   return state

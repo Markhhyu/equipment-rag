@@ -47,6 +47,9 @@ class HistoryMongoTool:
             # create_index自带幂等性：索引已存在时不会重复创建，无需额外判断
             self.chat_message.create_index([("session_id", 1), ("ts", -1)])
 
+            # 按Trace ID查询对应的助手回答。
+            self.chat_message.create_index([("trace_id", ASCENDING)], sparse=True)
+
             # 记录成功日志，确认数据库连接和初始化完成
             logging.info(f"Successfully connected to MongoDB: {self.db_name}")
         except Exception as e:
@@ -106,15 +109,14 @@ def clear_history(session_id: str) -> int:
         return 0
 
 
-def save_chat_message(
-        session_id: str,
-        role: str,
-        text: str,
-        rewritten_query: str = "",
-        item_names: List[str] = None,
-        image_urls: List[str] = None,
-        message_id: str = None
-) -> str:
+def save_chat_message(session_id: str,
+                      role: str,
+                      text: str,
+                      rewritten_query: str = "",
+                      item_names: List[str] = None,
+                      image_urls: List[str] = None,
+                      message_id: str = None,
+                      trace_id: str = "") -> str:
     """
     写入/更新单条会话记录到MongoDB
     支持两种模式：无message_id时新增记录，有message_id时更新已有记录
@@ -125,21 +127,31 @@ def save_chat_message(
     :param item_names: 关联的商品名称列表（可选，支持多商品，默认None）
     :param image_urls: 关联的图片URL列表（可选，默认None）
     :param message_id: 记录主键ID（可选，有值则更新，无值则新增）
+    :param trace_id: 当前回答对应的Langfuse Trace ID，用户消息通常为空
     :return: 插入/更新的记录唯一标识（新增返回ObjectId字符串，更新返回传入的message_id）
     """
     # 生成当前时间的时间戳（秒级），用于记录消息的创建时间，后续用于排序和查询
     ts = datetime.now().timestamp()
 
     # 构造要插入/更新的文档数据（MongoDB的基本数据单元是文档，类似Python字典）
+    # 构造MongoDB对话记录。
     document = {
-        "session_id": session_id,  # 会话ID，关联维度
-        "role": role,  # 消息角色
-        "text": text,  # 消息内容
-        "rewritten_query": rewritten_query or "",  # 重写查询，空值处理为空字符串
-        "item_names": item_names,  # 关联商品名称列表
-        "image_urls": image_urls,  # 关联图片URL列表
-        "ts": ts  # 时间戳，排序和时间筛选维度
+        "session_id": session_id,
+        "role": role,
+        "text": text,
+        "rewritten_query": rewritten_query or "",
+        "item_names": item_names or [],
+        "image_urls": image_urls or [],
+        "trace_id": trace_id or "",
+        "ts": ts
     }
+
+    # 新增记录时初始化反馈字段。
+    # 更新已有消息时不覆盖原有反馈结果。
+    if not message_id:
+        document["feedback_value"] = None
+        document["feedback_comment"] = ""
+        document["feedback_updated_at"] = None
 
     # 获取全局的HistoryMongoTool实例，使用单例模式
     mongo_tool = get_history_mongo_tool()
@@ -158,6 +170,44 @@ def save_chat_message(
         # 新增操作返回插入的ObjectId并转为字符串，便于上层使用（避免直接返回ObjectId对象）
         return str(result.inserted_id)
 
+def update_message_feedback(trace_id: str, value: int, comment: str = "") -> int:
+    """
+    根据Trace ID更新助手回答的用户反馈。
+
+    :param trace_id: 当前回答对应的Langfuse Trace ID
+    :param value: 1表示点赞，0表示点踩
+    :param comment: 用户填写的反馈说明
+    :return: 匹配到的MongoDB记录数量
+    """
+
+    if not trace_id:
+        raise ValueError("trace_id不能为空")
+
+    if value not in (0, 1):
+        raise ValueError("反馈值只能是0或1")
+
+    # 限制反馈说明长度，避免写入过大的文本。
+    safe_comment = (comment or "").strip()[:500]
+    mongo_tool = get_history_mongo_tool()
+
+    try:
+        result = mongo_tool.chat_message.update_one(
+            {"trace_id": trace_id, "role": "assistant"},
+            {
+                "$set": {
+                    "feedback_value": value,
+                    "feedback_comment": safe_comment,
+                    "feedback_updated_at": datetime.now().timestamp()
+                }
+            }
+        )
+
+        logging.info(f"Updated feedback, trace_id={trace_id}, value={value}, matched={result.matched_count}")
+        return result.matched_count
+
+    except Exception as e:
+        logging.error(f"Error updating feedback, trace_id={trace_id}: {e}")
+        return 0
 
 def update_message_item_names(ids: List[str], item_names: List[str]) -> int:
     """
