@@ -6,7 +6,7 @@
 2. 自动路径：文件日志默认输出到 项目根/logs/app_YYYYMMDD.log
 3. 自动清理：按配置保留日志，自动删除过期文件
 4. 中文友好：utf-8编码，彻底解决中文乱码
-5. 异步安全：开启异步入队，支持多线程/异步场景，避免日志错乱
+5. 队列可选：生产环境可开启异步入队，本地与Windows默认直接写入
 6. 开箱即用：项目所有模块直接导入logger即可使用
 7. 位置终极精准：穿透loguru内部+工具类自身，完美显示业务模块实际调用位置
 """
@@ -27,6 +27,14 @@ LOG_CONSOLE_LEVEL = os.getenv("LOG_CONSOLE_LEVEL", "INFO").upper()
 LOG_FILE_ENABLE = os.getenv("LOG_FILE_ENABLE", "True").lower() == "true"
 LOG_FILE_LEVEL = os.getenv("LOG_FILE_LEVEL", "INFO").upper()
 LOG_FILE_RETENTION = os.getenv("LOG_FILE_RETENTION", "7 days")
+LOG_ENQUEUE = os.getenv("LOG_ENQUEUE", "False").lower() == "true"
+LOG_CONSOLE_ENCODING = os.getenv("LOG_CONSOLE_ENCODING", "utf-8")
+
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding=LOG_CONSOLE_ENCODING, errors="backslashreplace")
+    except (AttributeError, LookupError, ValueError):
+        pass
 
 # -------------------------- 第三步：定义日志路径（自动推导项目根） --------------------------
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -62,7 +70,7 @@ def init_logger():
             level=LOG_CONSOLE_LEVEL,
             format=LOG_FORMAT,
             colorize=True,
-            enqueue=True
+            enqueue=LOG_ENQUEUE
         )
 
     # 3. 配置文件输出（若.env开启）
@@ -75,7 +83,7 @@ def init_logger():
             rotation="00:00",
             retention=LOG_FILE_RETENTION,
             encoding="utf-8",
-            enqueue=True,
+            enqueue=LOG_ENQUEUE,
             backtrace=True,
             diagnose=True
         )

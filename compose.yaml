@@ -1,0 +1,196 @@
+name: equipment-rag
+
+x-app-environment: &app-environment
+  PROJECT_ROOT: /app
+  OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  LLM_DEFAULT_MODEL: ${LLM_DEFAULT_MODEL:-gpt-4.1-mini}
+  VL_MODEL: ${VL_MODEL:-gpt-4.1-mini}
+  LLM_DEFAULT_TEMPERATURE: ${LLM_DEFAULT_TEMPERATURE:-0.1}
+  LLM_STREAM_USAGE: ${LLM_STREAM_USAGE:-true}
+  BGE_M3: ${BGE_M3:-BAAI/bge-m3}
+  BGE_M3_PATH: ${BGE_M3_PATH:-}
+  BGE_DEVICE: ${BGE_DEVICE:-cpu}
+  BGE_FP16: ${BGE_FP16:-false}
+  RERANKER_PROVIDER: ${RERANKER_PROVIDER:-bge}
+  RERANKER_MODEL: ${RERANKER_MODEL:-BAAI/bge-reranker-v2-m3}
+  RERANKER_DEVICE: ${RERANKER_DEVICE:-cpu}
+  RERANKER_USE_FP16: ${RERANKER_USE_FP16:-false}
+  RERANKER_BATCH_SIZE: ${RERANKER_BATCH_SIZE:-8}
+  RERANKER_MAX_LENGTH: ${RERANKER_MAX_LENGTH:-512}
+  RERANKER_NORMALIZE_SCORE: ${RERANKER_NORMALIZE_SCORE:-false}
+  MILVUS_URL: ${MILVUS_URL:-http://milvus:19530}
+  CHUNKS_COLLECTION: ${CHUNKS_COLLECTION:-equipment_chunks}
+  ENTITY_NAME_COLLECTION: ${ENTITY_NAME_COLLECTION:-equipment_entities}
+  ITEM_NAME_COLLECTION: ${ITEM_NAME_COLLECTION:-equipment_item_names}
+  MONGO_URL: ${MONGO_URL:-mongodb://equipment:equipment-local@mongo:27017/equipment_rag?authSource=admin}
+  MONGO_DB_NAME: ${MONGO_DB_NAME:-equipment_rag}
+  MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
+  MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-localhost:9000}
+  MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-equipment}
+  MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-equipment-local}
+  MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME:-equipment-rag}
+  MINIO_IMG_DIR: ${MINIO_IMG_DIR:-images}
+  MINIO_PDF_DIR: ${MINIO_PDF_DIR:-pdf_files}
+  MINIO_SECURE: ${MINIO_SECURE:-false}
+  MINERU_API_BASE_URL: ${MINERU_API_BASE_URL:-http://host.docker.internal:8002}
+  MINERU_API_TOKEN: ${MINERU_API_TOKEN:-}
+  MINERU_BACKEND: ${MINERU_BACKEND:-pipeline}
+  MINERU_EFFORT: ${MINERU_EFFORT:-high}
+  MINERU_PARSE_METHOD: ${MINERU_PARSE_METHOD:-auto}
+  MINERU_LANGUAGE: ${MINERU_LANGUAGE:-ch_server}
+  MINERU_FORMULA_ENABLE: ${MINERU_FORMULA_ENABLE:-true}
+  MINERU_TABLE_ENABLE: ${MINERU_TABLE_ENABLE:-true}
+  MINERU_IMAGE_ANALYSIS: ${MINERU_IMAGE_ANALYSIS:-false}
+  MINERU_RETURN_MIDDLE_JSON: ${MINERU_RETURN_MIDDLE_JSON:-true}
+  MINERU_RETURN_CONTENT_LIST: ${MINERU_RETURN_CONTENT_LIST:-true}
+  MINERU_POLL_INTERVAL_SECONDS: ${MINERU_POLL_INTERVAL_SECONDS:-3}
+  MINERU_TASK_TIMEOUT_SECONDS: ${MINERU_TASK_TIMEOUT_SECONDS:-3600}
+  MINERU_REQUEST_TIMEOUT_SECONDS: ${MINERU_REQUEST_TIMEOUT_SECONDS:-60}
+  MINERU_DOWNLOAD_TIMEOUT_SECONDS: ${MINERU_DOWNLOAD_TIMEOUT_SECONDS:-600}
+  MINERU_VERIFY_SSL: ${MINERU_VERIFY_SSL:-true}
+  MCP_DASHSCOPE_BASE_URL: ${MCP_DASHSCOPE_BASE_URL:-}
+  LANGFUSE_TRACING_ENABLED: ${LANGFUSE_TRACING_ENABLED:-false}
+  LANGFUSE_HOST: ${LANGFUSE_HOST:-http://host.docker.internal:3000}
+  LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+  LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+  NEO4J_URI: ${NEO4J_URI:-}
+  NEO4J_USERNAME: ${NEO4J_USERNAME:-}
+  NEO4J_PASSWORD: ${NEO4J_PASSWORD:-}
+  LOG_CONSOLE_ENABLE: ${LOG_CONSOLE_ENABLE:-true}
+  LOG_CONSOLE_LEVEL: ${LOG_CONSOLE_LEVEL:-INFO}
+  LOG_CONSOLE_ENCODING: ${LOG_CONSOLE_ENCODING:-utf-8}
+  LOG_FILE_ENABLE: ${LOG_FILE_ENABLE:-true}
+  LOG_FILE_LEVEL: ${LOG_FILE_LEVEL:-INFO}
+  LOG_FILE_RETENTION: ${LOG_FILE_RETENTION:-7 days}
+  LOG_ENQUEUE: ${LOG_ENQUEUE:-false}
+
+x-app-service: &app-service
+  build:
+    context: .
+  restart: unless-stopped
+  environment: *app-environment
+  depends_on:
+    mongo:
+      condition: service_healthy
+    minio:
+      condition: service_healthy
+    milvus:
+      condition: service_healthy
+  volumes:
+    - model-cache:/root/.cache
+    - app-output:/app/output
+    - app-logs:/app/logs
+
+services:
+  import-api:
+    <<: *app-service
+    command: ["uvicorn", "app.import_process.api.file_import_service:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${IMPORT_API_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+
+  query-api:
+    <<: *app-service
+    command: ["uvicorn", "app.query_process.api.query_service:app", "--host", "0.0.0.0", "--port", "8001"]
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${QUERY_API_PORT:-8001}:8001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+
+  mongo:
+    image: mongo:8.2.12-noble
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:-equipment}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:-equipment-local}
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${MONGO_PORT:-27017}:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.18
+    restart: unless-stopped
+    environment:
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: "1000"
+      ETCD_QUOTA_BACKEND_BYTES: "4294967296"
+      ETCD_SNAPSHOT_COUNT: "50000"
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls=http://0.0.0.0:2379 --data-dir /etcd
+    volumes:
+      - etcd-data:/etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-equipment}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-equipment-local}
+    command: minio server /minio_data --console-address ":9001"
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${MINIO_API_PORT:-9000}:9000"
+      - "${BIND_ADDRESS:-127.0.0.1}:${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/minio_data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  milvus:
+    image: milvusdb/milvus:v2.6.18
+    restart: unless-stopped
+    command: ["milvus", "run", "standalone"]
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      MINIO_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY:-equipment}
+      MINIO_SECRET_ACCESS_KEY: ${MINIO_SECRET_KEY:-equipment-local}
+    depends_on:
+      etcd:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${MILVUS_PORT:-19530}:19530"
+      - "${BIND_ADDRESS:-127.0.0.1}:${MILVUS_HEALTH_PORT:-9091}:9091"
+    volumes:
+      - milvus-data:/var/lib/milvus
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+volumes:
+  mongo-data:
+  minio-data:
+  etcd-data:
+  milvus-data:
+  model-cache:
+  app-output:
+  app-logs:

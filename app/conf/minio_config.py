@@ -11,6 +11,7 @@ load_dotenv()
 @dataclass
 class MinIOConfig:
     endpoint: str    # MinIO服务地址（含http/https和端口）
+    public_endpoint: str # 返回给浏览器的外部访问地址
     access_key: str  # MinIO访问密钥（对应MINIO_ACCESS_KEY）
     secret_key: str  # MinIO秘钥（对应MINIO_SECRET_KEY）
     bucket_name: str # MinIO默认存储桶名（知识库文件专用）
@@ -20,10 +21,11 @@ class MinIOConfig:
 
 # 实例化MinIO配置对象，自动从.env读取配置并绑定
 minio_config = MinIOConfig(
-    endpoint=os.getenv("MINIO_ENDPOINT"),
-    access_key=os.getenv("MINIO_ACCESS_KEY"),
-    secret_key=os.getenv("MINIO_SECRET_KEY"),
-    bucket_name=os.getenv("MINIO_BUCKET_NAME"),
-    minio_img_dir=os.getenv("MINIO_IMG_DIR"),
-    minio_secure=os.getenv("MINIO_SECURE") == "True"
+    endpoint=os.getenv("MINIO_ENDPOINT") or "127.0.0.1:9000",
+    public_endpoint=os.getenv("MINIO_PUBLIC_ENDPOINT") or os.getenv("MINIO_ENDPOINT") or "127.0.0.1:9000",
+    access_key=os.getenv("MINIO_ACCESS_KEY") or "minioadmin",
+    secret_key=os.getenv("MINIO_SECRET_KEY") or "minioadmin",
+    bucket_name=os.getenv("MINIO_BUCKET_NAME") or "equipment-rag",
+    minio_img_dir=os.getenv("MINIO_IMG_DIR") or "images",
+    minio_secure=(os.getenv("MINIO_SECURE") or "false").lower() == "true"
 )

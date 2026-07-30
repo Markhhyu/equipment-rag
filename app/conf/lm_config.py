@@ -18,9 +18,9 @@ class LLMConfig:
     llm_temperature: float
 
 lm_config = LLMConfig(
-    base_url=os.getenv("OPENAI_BASE_URL"),
-    api_key=os.getenv("OPENAI_API_KEY"),
-    lv_model=os.getenv("VL_MODEL"),
-    llm_model=os.getenv("LLM_DEFAULT_MODEL"),
-    llm_temperature=float(os.getenv("LLM_DEFAULT_TEMPERATURE"))
+    base_url=os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1",
+    api_key=os.getenv("OPENAI_API_KEY") or "",
+    lv_model=os.getenv("VL_MODEL") or "gpt-4.1-mini",
+    llm_model=os.getenv("LLM_DEFAULT_MODEL") or "gpt-4.1-mini",
+    llm_temperature=float(os.getenv("LLM_DEFAULT_TEMPERATURE") or "0.1")
 )

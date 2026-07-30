@@ -304,7 +304,7 @@ def upload_to_minio(minio_client: Minio, local_path: str, object_name: str) -> s
         # 根据配置选择HTTP/HTTPS协议
         protocol = "https" if minio_config.minio_secure else "http"
         # 构造MinIO基础访问URL
-        base_url = f"{protocol}://{minio_config.endpoint}/{minio_config.bucket_name}"
+        base_url = f"{protocol}://{minio_config.public_endpoint}/{minio_config.bucket_name}"
         # 拼接完整图片访问URL base_url 后面带 / 中间直接两个字符串拼接即可
         img_url = f"{base_url}{object_name}"
         logger.info(f"图片上传成功，访问URL：{img_url}")

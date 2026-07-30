@@ -20,7 +20,6 @@ from app.utils.task_utils import (
     get_task_status,
 )
 from app.import_process.agent.state import get_default_state
-from app.import_process.agent.main_graph import kb_import_app  # LangGraph全流程编译实例
 from app.core.logger import logger  # 项目统一日志工具
 
 # 初始化FastAPI应用实例
@@ -38,6 +37,12 @@ app.add_middleware(
     allow_methods=["*"],  # 允许所有HTTP方法（GET/POST/PUT/DELETE等）
     allow_headers=["*"],  # 允许所有请求头
 )
+
+
+@app.get("/health", tags=["system"])
+async def health():
+    """容器编排与负载均衡器使用的存活探针。"""
+    return {"status": "ok", "service": "import-api"}
 
 
 # --------------------------
@@ -79,6 +84,8 @@ def run_graph_task(task_id: str, local_dir: str, local_file_path: str):
     :param local_dir: 该任务的本地文件存储目录（含临时文件/解析结果）
     :param local_file_path: 上传文件的本地绝对路径
     """
+    from app.import_process.agent.main_graph import kb_import_app
+
     try:
         # 1. 更新任务全局状态为：处理中
         update_task_status(task_id, "processing")
