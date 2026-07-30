@@ -14,6 +14,7 @@ class QueryApiProvider:
     timeout_seconds: float = 120.0
 
     def predict(self, case: EvalCase) -> Prediction:
+        """调用真实查询 API，把在线回答转换为统一的评测预测结构。"""
         started = time.perf_counter()
         response = requests.post(
             f"{self.base_url.rstrip('/')}/query",

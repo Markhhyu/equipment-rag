@@ -1,4 +1,4 @@
-"""Run the local quality gate with one cross-platform command."""
+"""用一条跨平台命令运行与 CI 一致的本地质量门禁。"""
 
 from __future__ import annotations
 
@@ -52,9 +52,9 @@ def main() -> int:
         run("docker", "compose", "config", "--quiet")
         run("docker", "compose", "--env-file", ".env.example", "config", "--quiet")
     else:
-        print("\nDocker CLI not found; skipped Compose validation.", flush=True)
+        print("\n未找到 Docker CLI，已跳过 Compose 配置验证。", flush=True)
 
-    print("\nAll local checks passed.", flush=True)
+    print("\n所有本地检查均已通过。", flush=True)
     return 0
 
 

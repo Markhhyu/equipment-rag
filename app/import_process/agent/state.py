@@ -85,13 +85,13 @@ def create_default_state(**overrides) -> ImportGraphState:
     """
     创建默认状态，支持覆盖
 
-    Args:
+    参数：
         **overrides: 要覆盖的字段（关键字参数解包）
 
-    Returns:
+    返回：
         新的状态实例
 
-    Examples:
+    示例：
         state = create_default_state(task_id="task_001", local_file_path="doc.pdf")
     """
 

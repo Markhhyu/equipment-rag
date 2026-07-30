@@ -1,5 +1,6 @@
 name: CI
 
+# PR、main 分支推送和手动触发都会运行同一套质量门禁。
 on:
   workflow_dispatch:
   pull_request:
@@ -11,6 +12,7 @@ permissions:
   contents: read
 
 concurrency:
+  # 同一分支有新提交时取消旧任务，避免浪费 CI 资源。
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
@@ -22,10 +24,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # 固定到 v6 的确定提交
 
       - name: Install uv and Python
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # 固定到 v8.1.0 的确定提交
         with:
           version: "0.12.0"
           python-version: "3.14"
@@ -65,6 +67,7 @@ jobs:
           docker compose --env-file .env.example config --quiet
 
   dependency-review:
+    # 仅在 PR 中检查新增依赖，发现高危依赖时阻止合并。
     name: Dependency review
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -73,9 +76,9 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # 固定到 v6 的确定提交
 
       - name: Review dependency changes
-        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # 固定到 v5.0.0 的确定提交
         with:
           fail-on-severity: high

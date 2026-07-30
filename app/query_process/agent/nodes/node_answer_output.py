@@ -34,8 +34,8 @@ def step_1_check_answer(state) -> bool:
 # HAK 180 烫金机的操作面板位于机器正前方。开启电源后，您需要先设置温度，默认建议设置在 110℃ 左右。
 # 具体的按键位置请参考下图：
 # 【图片】
-# http://local-server/images/panel_view.jpg
-# http://local-server/images/button_detail.jpg
+# 图片地址示例：http://local-server/images/panel_view.jpg
+# 图片地址示例：http://local-server/images/button_detail.jpg
 def step_2_construct_prompt(state: QueryGraphState) -> str:
   """
   第一阶段：构建 Prompt

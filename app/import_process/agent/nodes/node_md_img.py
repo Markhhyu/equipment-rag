@@ -336,7 +336,7 @@ def process_md_file(md_content: str, image_info: Dict[str, Tuple[str, str]]) -> 
         # 替换匹配内容：使用新摘要作为图片描述，新URL作为图片路径
         # - 如果你的 summary 和 new_url 是完全可控的纯文本（不含反斜杠） ：这两种写法确实 一模一样 。
         # - 如果你想写出“防御性代码”（Defensive Code），防止未来某天被特殊字符坑 ：请坚持使用 Lambda 写法 。它是最稳健、最安全的做法。
-        # md_content = pattern.sub(lambda m: f"![{summary}]({new_url})", md_content)
+        # 替换写法示例：md_content = pattern.sub(lambda m: f"![{summary}]({new_url})", md_content)
         md_content = pattern.sub( f"![{summary}]({new_url})", md_content)
         logger.debug(f"完成MD图片引用替换：{img_filename} → {new_url}")
 
@@ -424,7 +424,7 @@ def node_md_img(state: ImportGraphState) -> ImportGraphState:
         return state
     
     # 步骤2：扫描并筛选MD中引用的支持格式图片
-    # (image_file, img_path, context_list[0])
+    # 参数结构示例：(image_file, img_path, context_list[0])
     targets = step_2_scan_images(md_content, images_dir)
     if not targets:
         logger.info("未检测到MD中引用的支持格式图片，跳过后续处理")

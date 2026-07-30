@@ -1,5 +1,6 @@
 name: equipment-rag
 
+# 两个应用服务共用的环境变量，修改一次即可同时影响导入与查询 API。
 x-app-environment: &app-environment
   PROJECT_ROOT: /app
   APP_ENVIRONMENT: ${APP_ENVIRONMENT:-development}
@@ -80,6 +81,7 @@ x-app-environment: &app-environment
   LOG_FILE_RETENTION: ${LOG_FILE_RETENTION:-7 days}
   LOG_ENQUEUE: ${LOG_ENQUEUE:-false}
 
+# 应用服务公共模板：统一镜像、依赖服务、数据目录和重启策略。
 x-app-service: &app-service
   build:
     context: .
@@ -98,6 +100,7 @@ x-app-service: &app-service
     - app-logs:/app/logs
 
 services:
+  # 文档导入 API：负责解析文件、生成向量并写入知识库。
   import-api:
     <<: *app-service
     command: ["uvicorn", "app.import_process.api.file_import_service:app", "--host", "0.0.0.0", "--port", "8000"]
@@ -110,6 +113,7 @@ services:
       retries: 5
       start_period: 90s
 
+  # 查询 API：负责运行 RAG Agent 并提供聊天接口。
   query-api:
     <<: *app-service
     command: ["uvicorn", "app.query_process.api.query_service:app", "--host", "0.0.0.0", "--port", "8001"]
@@ -122,6 +126,7 @@ services:
       retries: 5
       start_period: 90s
 
+  # MongoDB 保存会话历史、Agent 运行状态和 LangGraph 检查点。
   mongo:
     image: mongo:8.2.12-noble
     restart: unless-stopped
@@ -138,6 +143,7 @@ services:
       timeout: 5s
       retries: 10
 
+  # etcd 保存 Milvus 的元数据。
   etcd:
     image: quay.io/coreos/etcd:v3.5.18
     restart: unless-stopped
@@ -155,6 +161,7 @@ services:
       timeout: 5s
       retries: 10
 
+  # MinIO 保存原始文档和文档中的图片。
   minio:
     image: minio/minio:RELEASE.2024-12-18T13-15-44Z
     restart: unless-stopped
@@ -173,6 +180,7 @@ services:
       timeout: 5s
       retries: 10
 
+  # Milvus 保存文本向量和实体索引，提供语义检索能力。
   milvus:
     image: milvusdb/milvus:v2.6.18
     restart: unless-stopped
@@ -202,6 +210,7 @@ services:
       start_period: 30s
 
 volumes:
+  # 命名卷让容器重建后仍能保留数据、模型缓存和日志。
   mongo-data:
   minio-data:
   etcd-data:

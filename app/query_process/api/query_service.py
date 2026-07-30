@@ -31,7 +31,7 @@ from app.observability.langfuse_monitor import (
 )
 
 # 后续导入启动图对象
-#from app.query_process.main_graph import query_app
+# 如需直接复用预编译图，可从 app.query_process.main_graph 导入 query_app。
 
 
 # 定义fastapi对象

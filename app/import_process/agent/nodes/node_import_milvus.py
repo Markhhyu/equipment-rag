@@ -139,7 +139,7 @@ def create_collection(client, collection_name: str, vector_dimension: int):
     # 所以你的代码里必须是：
     # ```
     # vector_dimension=必须是1024，不能改！
-    # schema.add_field(...,dim=vector_dimension)
+    # 字段定义示例：schema.add_field(..., dim=vector_dimension)。
     # ``` (如果你用的是 BGE-base ，那就是 768； BGE-small 是 384。这完全由模型架构决定。)
     # 3. 构建索引参数：为向量字段创建索引，提升检索性能
     index_params = client.prepare_index_params()

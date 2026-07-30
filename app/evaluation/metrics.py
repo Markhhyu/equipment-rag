@@ -12,6 +12,7 @@ _CLARIFICATION_TERMS = ("请提供", "请确认", "型号", "设备名称", "whi
 
 
 def normalize_text(value: str) -> str:
+    """统一大小写、全半角和多余空白，减少格式差异对评测的影响。"""
     return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
 
 
@@ -51,6 +52,7 @@ class CaseMetrics:
 
 
 def score_case(case: EvalCase, prediction: Prediction) -> CaseMetrics:
+    """用可重复计算的规则评估单条回答，不调用大模型担任裁判。"""
     answer = normalize_text(prediction.answer)
     required_matches = sum(normalize_text(term) in answer for term in case.required_terms)
     forbidden_matches = sum(normalize_text(term) in answer for term in case.forbidden_terms)
@@ -61,12 +63,14 @@ def score_case(case: EvalCase, prediction: Prediction) -> CaseMetrics:
 
     retrieval_recall = None
     if prediction.retrieved_source_ids is not None:
+        # 只有预测结果提供了召回文档 ID 时才计算检索召回率。
         expected = set(case.expected_source_ids)
         retrieved = set(prediction.retrieved_source_ids)
         retrieval_recall = _ratio(len(expected & retrieved), len(expected))
 
     citation_pass = 1.0
     if case.require_citation:
+        # 引用既可以是期望来源 ID，也可以是可识别的 URL 或引用标记。
         expected_id_is_cited = any(normalize_text(source_id) in answer for source_id in case.expected_source_ids)
         citation_pass = float(expected_id_is_cited or bool(_CITATION_PATTERN.search(prediction.answer)))
 

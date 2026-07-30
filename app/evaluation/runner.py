@@ -71,6 +71,7 @@ def evaluate(
     predictions: Iterable[Prediction],
     thresholds: dict[str, float] | None = None,
 ) -> EvaluationReport:
+    """按用例评分并执行总指标门禁，返回可供 CI 判断的评测报告。"""
     configured = {**DEFAULT_THRESHOLDS, **(thresholds or {})}
     prediction_map = {prediction.case_id: prediction for prediction in predictions}
     case_results: list[CaseResult] = []
@@ -78,6 +79,7 @@ def evaluate(
     for case in cases:
         prediction = prediction_map.get(case.case_id)
         if prediction is None:
+            # 缺失预测按空回答处理，使离线回放不会静默跳过失败用例。
             prediction = Prediction(case_id=case.case_id, answer="")
 
         metrics = score_case(case, prediction)
@@ -95,6 +97,7 @@ def evaluate(
                 "latency_pass",
             )
         }
+        # 平均分达标还不够：每个已测量的关键指标也必须达到独立阈值。
         metric_gates_pass = all(
             value is None or value >= metric_thresholds[name] for name, value in asdict(metrics).items()
         )
@@ -135,6 +138,7 @@ def evaluate(
             continue
         measured = summary.get(metric_name)
         if measured is None:
+            # 配置了阈值但没有产生数据时视为失败，避免评测能力失效后仍显示通过。
             threshold_failures.append(f"{metric_name}: not measured (required >= {threshold:.3f})")
         elif float(measured) < threshold:
             threshold_failures.append(f"{metric_name}: {float(measured):.3f} < {threshold:.3f}")

@@ -3,6 +3,7 @@ name = "equipment-rag"
 version = "0.1.0"
 description = "Enterprise-ready equipment knowledge RAG agent"
 requires-python = ">=3.14,<3.15"
+# 运行时依赖统一在这里声明，uv.lock 负责锁定实际安装版本。
 dependencies = [
     "fastapi>=0.141,<0.142",
     "flagembedding>=1.4,<2",
@@ -31,6 +32,7 @@ dependencies = [
 ]
 
 [[tool.uv.index]]
+# PyTorch 单独使用官方 CPU 源，降低开源用户首次安装时的环境要求。
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
@@ -39,6 +41,7 @@ explicit = true
 torch = { index = "pytorch-cpu" }
 
 [dependency-groups]
+# 开发依赖只用于测试、覆盖率、代码检查和格式检查，不会进入生产镜像。
 dev = [
     "pytest>=9.1,<10",
     "pytest-asyncio>=1.4,<2",
@@ -47,6 +50,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
+# 测试至少保持 30% 总覆盖率；新增核心逻辑应优先补充针对性测试。
 addopts = "-p no:cacheprovider --strict-config --strict-markers --cov=app --cov-report=term-missing:skip-covered --cov-fail-under=30"
 asyncio_mode = "auto"
 pythonpath = ["."]
@@ -68,6 +72,7 @@ show_missing = true
 skip_covered = true
 
 [tool.ruff]
+# Ruff 同时负责静态检查和统一格式，目标版本必须与项目 Python 版本一致。
 line-length = 120
 target-version = "py314"
 exclude = ["test", "deploy"]

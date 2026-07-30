@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 
 def _positive_int(name: str, default: int) -> int:
+    """读取正整数环境变量；缺失或格式错误时使用安全默认值。"""
     raw_value = os.getenv(name)
     if raw_value is None:
         return default
@@ -17,6 +18,8 @@ def _positive_int(name: str, default: int) -> int:
 
 @dataclass(frozen=True)
 class RuntimeConfig:
+    """集中保存 Agent 运行状态与检查点相关配置。"""
+
     run_store_backend: str
     checkpoint_backend: str
     mongo_url: str
@@ -29,6 +32,7 @@ class RuntimeConfig:
 
 
 def load_runtime_config() -> RuntimeConfig:
+    """从环境变量构建运行时配置，不在业务代码中散落默认值。"""
     mongo_database = os.getenv("MONGO_DB_NAME") or "equipment_rag"
     return RuntimeConfig(
         run_store_backend=(os.getenv("RUN_STORE_BACKEND") or "memory").strip().lower(),

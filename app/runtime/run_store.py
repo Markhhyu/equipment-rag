@@ -15,6 +15,8 @@ from app.runtime.config import load_runtime_config
 
 
 class RunStatus(StrEnum):
+    """Agent 一次运行从排队到结束可能出现的状态。"""
+
     PENDING = "pending"
     RUNNING = "running"
     SUCCEEDED = "succeeded"
@@ -24,6 +26,8 @@ class RunStatus(StrEnum):
 
 @dataclass
 class RunRecord:
+    """可持久化的 Agent 运行记录，也是重试和状态查询的唯一事实来源。"""
+
     run_id: str
     kind: str
     input: dict[str, Any]
@@ -74,6 +78,7 @@ class RunRecord:
         }
 
     def to_public_dict(self) -> dict[str, Any]:
+        # 运行中但租约已过期，通常表示旧 Worker 异常退出，此时允许新 Worker 重试。
         lease_expired = self.lease_expires_at is not None and self.lease_expires_at <= datetime.now(UTC)
         retryable_status = self.status == RunStatus.FAILED or (self.status == RunStatus.RUNNING and lease_expired)
         return {
@@ -93,6 +98,8 @@ class RunRecord:
 
 
 class RunStore(ABC):
+    """运行状态存储接口；内存和 MongoDB 后端必须遵守相同状态转换规则。"""
+
     @abstractmethod
     def create(
         self,
@@ -109,6 +116,7 @@ class RunStore(ABC):
         raise NotImplementedError
 
     def get_for_tenant(self, run_id: str, tenant_id: str) -> RunRecord | None:
+        # 查询时同时校验租户，避免仅凭 run_id 读取其他租户的数据。
         record = self.get(run_id)
         if record is None or record.tenant_id != tenant_id:
             return None
@@ -136,6 +144,8 @@ class RunStore(ABC):
 
 
 class InMemoryRunStore(RunStore):
+    """用于本地开发和单元测试的线程安全内存实现。"""
+
     def __init__(self, clock: Callable[[], datetime] | None = None) -> None:
         self._records: dict[str, RunRecord] = {}
         self._lock = RLock()
@@ -150,6 +160,7 @@ class InMemoryRunStore(RunStore):
         tenant_id: str = "local",
     ) -> RunRecord:
         with self._lock:
+            # 相同输入重复创建时直接返回原记录，实现请求幂等。
             existing = self._records.get(run_id)
             if existing is not None:
                 if existing.kind != kind or existing.input != input_data or existing.tenant_id != tenant_id:
@@ -175,6 +186,7 @@ class InMemoryRunStore(RunStore):
             record = self._required(run_id)
             now = self._clock()
             lease_expired = record.lease_expires_at is not None and record.lease_expires_at <= now
+            # 只允许领取待处理任务，或接管已超过租约时间的运行中任务。
             if record.status != RunStatus.PENDING and not (record.status == RunStatus.RUNNING and lease_expired):
                 raise RuntimeError(f"run {run_id!r} cannot be claimed from status {record.status.value!r}")
             if record.attempt >= record.max_attempts:
@@ -248,6 +260,8 @@ class InMemoryRunStore(RunStore):
 
 
 class MongoRunStore(RunStore):
+    """生产环境运行状态存储，使用 MongoDB 原子更新避免多个 Worker 重复执行。"""
+
     def __init__(self, mongo_url: str, database: str, collection: str) -> None:
         from pymongo import ASCENDING, MongoClient
 
@@ -294,6 +308,7 @@ class MongoRunStore(RunStore):
         from pymongo import ReturnDocument
 
         now = datetime.now(UTC)
+        # 条件和状态更新在数据库中一次完成，只有一个 Worker 能成功领取同一任务。
         document = self._collection.find_one_and_update(
             {
                 "run_id": run_id,
@@ -400,6 +415,7 @@ class MongoRunStore(RunStore):
     def _owned_update(self, run_id: str, owner: str, update: dict[str, Any]) -> RunRecord:
         from pymongo import ReturnDocument
 
+        # owner 必须与当前租约一致，防止租约过期后的旧 Worker 覆盖新结果。
         document = self._collection.find_one_and_update(
             {
                 "run_id": run_id,
@@ -420,6 +436,7 @@ _run_store_lock = RLock()
 
 
 def get_run_store() -> RunStore:
+    """根据配置创建全局运行状态存储，并在后续请求中复用。"""
     global _run_store
     if _run_store is not None:
         return _run_store
@@ -439,6 +456,7 @@ def get_run_store() -> RunStore:
 
 
 def run_owner() -> str:
+    """生成当前执行线程的唯一租约所有者标识。"""
     return f"{socket.gethostname()}:{os.getpid()}:{threading.get_ident()}"
 
 

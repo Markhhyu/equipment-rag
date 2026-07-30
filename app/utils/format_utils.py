@@ -12,14 +12,14 @@ def format_state(state: Dict[str, Any], indent: int = 4) -> str:
     """
     专门用于格式化工作流状态（ImportGraphState）
 
-    Args:
+    参数：
         state: ImportGraphState 工作流状态字典
         indent: JSON 缩进空格数，默认 4
 
-    Returns:
+    返回：
         格式化后的 JSON 字符串
 
-    Example:
+    示例：
         >>> state = {"task_id": "001", "pdf_path": "test.pdf"}
         >>> print(format_state(state))
         {
@@ -35,15 +35,15 @@ def format_json(data: Any, indent: int = 4, ensure_ascii: bool = False) -> str:
     """
     通用 JSON 格式化函数
 
-    Args:
+    参数：
         data: 需要格式化的数据（字典、列表等可序列化对象）
         indent: JSON 缩进空格数，默认 4
         ensure_ascii: 是否转义非 ASCII 字符，默认 False（保留中文等字符）
 
-    Returns:
+    返回：
         格式化后的 JSON 字符串
 
-    Example:
+    示例：
         >>> data = {"name": "测试", "value": 123}
         >>> print(format_json(data))
         {

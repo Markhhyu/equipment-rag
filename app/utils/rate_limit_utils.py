@@ -1,4 +1,4 @@
-# app/utils/rate_limit_utils.py
+# API 调用限速工具。
 import time
 from typing import Deque
 from app.core.logger import logger  # 复用项目全局logger

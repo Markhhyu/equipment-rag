@@ -16,8 +16,11 @@ _REQUEST_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_.:-]{1,128}$")
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """为每个响应添加审计标识和常用浏览器安全响应头。"""
+
     async def dispatch(self, request: Request, call_next):
         supplied_request_id = request.headers.get("X-Request-ID", "")
+        # 只接受格式安全的外部请求 ID，否则生成新 ID，避免日志注入。
         request_id = supplied_request_id if _REQUEST_ID_PATTERN.fullmatch(supplied_request_id) else uuid.uuid4().hex
         request.state.request_id = request_id
         started = time.perf_counter()
@@ -36,6 +39,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 
 def configure_http_security(app: FastAPI) -> None:
+    """集中注册安全响应头和受限 CORS，供两个 API 服务复用。"""
     config = load_security_config()
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(

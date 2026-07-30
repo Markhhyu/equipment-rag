@@ -154,7 +154,7 @@ def node_rrf(state):
 
     # 第一步：获取上游检索节点返回的文档
     # 上游检索节点（Milvus hybrid_search）返回的通常是 hit 列表：
-    #  {"entity": {...fields...}, "distance": ...}
+    # 数据结构示例：{"entity": {...字段...}, "distance": ...}。
     # RRF 需要使用 chunk_id 做去重与计分，因此这里必须保留 entity（而不是仅抽取 content 字符串）。
     embedding_chunks = _as_entity_list(state.get("embedding_chunks"))
     hyde_embedding_chunks = _as_entity_list(state.get("hyde_embedding_chunks"))

@@ -36,6 +36,8 @@ def _csv(name: str, default: str) -> tuple[str, ...]:
 
 @dataclass(frozen=True)
 class ApiKeyIdentity:
+    """一把 API Key 对应的调用方、租户和角色；密钥不会出现在 repr 日志中。"""
+
     key_id: str
     secret: str = field(repr=False)
     tenant_id: str
@@ -44,6 +46,8 @@ class ApiKeyIdentity:
 
 @dataclass(frozen=True)
 class SecurityConfig:
+    """应用启动时使用的安全配置快照。"""
+
     environment: str
     auth_mode: str
     api_keys: tuple[ApiKeyIdentity, ...]
@@ -59,6 +63,7 @@ class SecurityConfig:
 
 
 def _parse_api_keys(raw_value: str) -> tuple[ApiKeyIdentity, ...]:
+    """解析并严格校验 AUTH_API_KEYS_JSON，配置错误时直接阻止启动。"""
     if not raw_value.strip():
         return ()
     try:
@@ -105,6 +110,7 @@ def _parse_identity(entry: dict[str, Any]) -> ApiKeyIdentity:
 
 @lru_cache(maxsize=1)
 def load_security_config() -> SecurityConfig:
+    """加载一次安全配置并缓存，避免每个请求重复解析密钥 JSON。"""
     environment = (os.getenv("APP_ENVIRONMENT") or "development").strip().lower()
     auth_mode = (os.getenv("AUTH_MODE") or "disabled").strip().lower()
     if auth_mode not in {"disabled", "api_key"}:
@@ -130,6 +136,7 @@ def load_security_config() -> SecurityConfig:
         allowed_upload_extensions=allowed_extensions,
     )
 
+    # 安全配置采用“失败即关闭”策略：生产环境不满足要求时拒绝启动。
     if config.auth_mode == "api_key" and not config.api_keys:
         raise ValueError("AUTH_MODE=api_key requires at least one AUTH_API_KEYS_JSON entry")
     if config.production and config.auth_mode != "api_key":

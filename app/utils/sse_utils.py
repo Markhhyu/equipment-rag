@@ -15,7 +15,7 @@ class SSEEvent:
 
 
 # 全局 SSE 会话队列存储
-# Key: session_id, Value: queue.Queue
+# 键是 session_id，值是该会话独立使用的 queue.Queue。
 _session_stream: Dict[str, queue.Queue] = {}
 
 def get_sse_queue(session_id: str) -> Optional["queue.Queue"]:
@@ -37,7 +37,7 @@ def remove_sse_queue(session_id: str):
 def _sse_pack(event: str, data: Dict[str, Any]) -> str:
     """打包 SSE 消息格式"""
     payload = json.dumps(data, ensure_ascii=False)
-    # print(f"[SSE] Packing event: {event}, payload: {payload[:50]}...")
+    # 调试时可在这里打印打包后的事件类型和数据摘要。
     return f"event: {event}\ndata: {payload}\n\n"
 
 def push_to_session(session_id: str, event: str, data: Dict[str, Any]):
@@ -46,7 +46,7 @@ def push_to_session(session_id: str, event: str, data: Dict[str, Any]):
     """
     stream_queue = get_sse_queue(session_id)
     if stream_queue:
-        # print(f"[SSE] Pushing to session {session_id}: {event}")
+        # 调试时可在这里观察事件被推入了哪个会话队列。
         stream_queue.put({"event": event, "data": data})
     else:
         print(f"[SSE] Warning: No queue found for session {session_id} when pushing {event}")
@@ -79,13 +79,13 @@ async def sse_generator(session_id: str, request: Request):
                 # 使用 run_in_executor 避免阻塞 async 事件循环
                 msg = await loop.run_in_executor(None, stream_queue.get, True, 1.0)
             except queue.Empty:
-                # print(f"[SSE] Queue empty for {session_id}, waiting...")
+                # 队列为空属于正常情况，生成器会继续等待后续事件。
                 continue
 
             event = msg.get("event")
             data = msg.get("data")
             
-            # print(f"[SSE] Yielding event {event} for {session_id}")
+            # 调试时可在这里观察实际发送给前端的事件。
 
             # 特殊关闭事件
             if event == "__close__":

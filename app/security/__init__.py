@@ -1,1 +1,1 @@
-"""Authentication, tenancy, and HTTP hardening helpers."""
+"""认证、租户隔离和 HTTP 安全加固工具。"""
