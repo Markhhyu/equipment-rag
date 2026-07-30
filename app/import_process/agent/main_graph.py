@@ -14,6 +14,7 @@ from app.import_process.agent.nodes.node_document_split import node_document_spl
 from app.import_process.agent.nodes.node_item_name_recognition import node_item_name_recognition  # 项目名识别：从分块中提取核心项目名称（业务定制化）
 from app.import_process.agent.nodes.node_bge_embedding import node_bge_embedding  # BGE向量化：将文本分块转换为向量表示（适配Milvus向量库）
 from app.import_process.agent.nodes.node_import_milvus import node_import_milvus  # 导入Milvus：将向量数据写入Milvus向量数据库
+from app.runtime.checkpointing import get_checkpointer
 
 
 # 初始化环境变量：必须在配置读取前执行，确保后续节点能获取到环境变量中的配置信息
@@ -89,4 +90,4 @@ workflow.add_edge("node_import_milvus", END)  # Milvus入库完成 → 工作流
 # 语法：compile() → 将StateGraph构建的流程编译为LangGraph的可执行应用
 # 作用：生成可调用的kb_import_app，通过invoke()方法触发工作流执行
 # 特性：编译后可重复调用，支持传入不同的初始状态，实现多任务执行
-kb_import_app = workflow.compile()
+kb_import_app = workflow.compile(checkpointer=get_checkpointer())

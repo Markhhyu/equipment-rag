@@ -4,16 +4,16 @@ from .sse_utils import push_to_session
 # ---------------------------
 # 内存态任务追踪（单进程）
 # ---------------------------
-# key: task_id
+# 键：task_id
 # value: 节点名列表（原始英文/节点ID）
 _tasks_running_list: Dict[str, List[str]] = {}
 _tasks_done_list: Dict[str, List[str]] = {}
 
-# key: task_id
+# 键：task_id
 # value: status 字符串（如 pending/processing/completed/failed）
 _tasks_status: Dict[str, str] = {}
 
-# key: task_id
+# 键：task_id
 # value: 任务结果（例如 query 的 answer）
 _tasks_result: Dict[str, Dict[str, str]] = {}
 

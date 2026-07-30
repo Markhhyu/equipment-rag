@@ -11,7 +11,7 @@ from minio import Minio
 from minio.deleteobjects import DeleteObject
 
 # 【核心改造1：移除原生OpenAI，导入LangChain工具类和多模态消息模块】
-from app.clients.minio_utils import get_minio_client
+from app.clients.minio_utils import get_minio_client, minio_object_uri
 from app.import_process.agent.state import ImportGraphState
 from app.utils.task_utils import add_running_task
 # LLM客户端工具类（核心复用，替换原生OpenAI调用）
@@ -28,6 +28,7 @@ from app.core.logger import logger
 from app.utils.rate_limit_utils import apply_api_rate_limit
 # 提示词加载工具
 from app.core.load_prompt import load_prompt
+from app.security.tenancy import tenant_object_prefix
 
 # MinIO支持的图片格式集合（小写后缀，统一匹配标准）
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
@@ -294,21 +295,9 @@ def upload_to_minio(minio_client: Minio, local_path: str, object_name: str) -> s
             content_type=f"image/{os.path.splitext(local_path)[1][1:]}"
         )
 
-        # 处理路径特殊字符，避免URL解析错误
-        # 假设原始 object_name 是：图片\logo.png
-        # 替换后变成：图片%5Clogo.png
-        # 这个字符串是URL 合法格式，所有服务器 / 浏览器都能正确识别；
-        # MinIO 接收到 %5C 后，会自动解析回 \，保证对象名的正确性；
-        # 后续通过 URL 访问时，%5C 会被正确解码，不会出现路径错误。
-        object_name = object_name.replace("\\", "%5C")
-        # 根据配置选择HTTP/HTTPS协议
-        protocol = "https" if minio_config.minio_secure else "http"
-        # 构造MinIO基础访问URL
-        base_url = f"{protocol}://{minio_config.public_endpoint}/{minio_config.bucket_name}"
-        # 拼接完整图片访问URL base_url 后面带 / 中间直接两个字符串拼接即可
-        img_url = f"{base_url}{object_name}"
-        logger.info(f"图片上传成功，访问URL：{img_url}")
-        return img_url
+        object_uri = minio_object_uri(minio_config.bucket_name, object_name)
+        logger.info(f"图片上传成功，对象引用：{object_uri}")
+        return object_uri
     except Exception as e:
         logger.error(f"图片上传MinIO失败：{local_path}，错误信息：{str(e)}")
         return None
@@ -347,7 +336,7 @@ def process_md_file(md_content: str, image_info: Dict[str, Tuple[str, str]]) -> 
         # 替换匹配内容：使用新摘要作为图片描述，新URL作为图片路径
         # - 如果你的 summary 和 new_url 是完全可控的纯文本（不含反斜杠） ：这两种写法确实 一模一样 。
         # - 如果你想写出“防御性代码”（Defensive Code），防止未来某天被特殊字符坑 ：请坚持使用 Lambda 写法 。它是最稳健、最安全的做法。
-        # md_content = pattern.sub(lambda m: f"![{summary}]({new_url})", md_content)
+        # 替换写法示例：md_content = pattern.sub(lambda m: f"![{summary}]({new_url})", md_content)
         md_content = pattern.sub( f"![{summary}]({new_url})", md_content)
         logger.debug(f"完成MD图片引用替换：{img_filename} → {new_url}")
 
@@ -356,7 +345,7 @@ def process_md_file(md_content: str, image_info: Dict[str, Tuple[str, str]]) -> 
     return md_content
 
 def step_4_upload_and_replace(minio_client: Minio, doc_stem: str, targets: List[Tuple[str, str, Tuple[str, str]]],
-                              summaries: Dict[str, str], md_content: str) -> str:
+                              summaries: Dict[str, str], md_content: str, tenant_id: str = "local") -> str:
     """
     步骤4：核心流程-图片上传MinIO + 合并摘要&URL + 替换MD图片引用
     完整流程：清理MinIO旧目录 → 批量上传新图片 → 合并摘要和URL → 替换MD内容
@@ -369,7 +358,7 @@ def step_4_upload_and_replace(minio_client: Minio, doc_stem: str, targets: List[
     """
     # 构造MinIO上传目录：配置根目录 + 文档主名（去除空格，避免路径问题）
     minio_img_dir = minio_config.minio_img_dir
-    upload_dir = f"{minio_img_dir}/{doc_stem}".replace(" ", "")
+    upload_dir = tenant_object_prefix(tenant_id, minio_img_dir, doc_stem.replace(" ", ""))
 
     # 步骤1：清理该文档对应的MinIO旧目录，保证幂等性
     clean_minio_directory(minio_client, upload_dir)
@@ -435,7 +424,7 @@ def node_md_img(state: ImportGraphState) -> ImportGraphState:
         return state
     
     # 步骤2：扫描并筛选MD中引用的支持格式图片
-    # (image_file, img_path, context_list[0])
+    # 参数结构示例：(image_file, img_path, context_list[0])
     targets = step_2_scan_images(md_content, images_dir)
     if not targets:
         logger.info("未检测到MD中引用的支持格式图片，跳过后续处理")
@@ -445,7 +434,14 @@ def node_md_img(state: ImportGraphState) -> ImportGraphState:
     summaries = step_3_generate_summaries(path_obj.stem, targets)
 
     # 步骤4：上传图片至MinIO，替换MD图片路径并填充摘要
-    new_md_content = step_4_upload_and_replace(minio_client, path_obj.stem, targets, summaries, md_content)
+    new_md_content = step_4_upload_and_replace(
+        minio_client,
+        path_obj.stem,
+        targets,
+        summaries,
+        md_content,
+        str(state.get("tenant_id") or "local"),
+    )
     state["md_content"] = new_md_content
 
     # 步骤5：备份并保存新MD文件，更新状态中的文件路径

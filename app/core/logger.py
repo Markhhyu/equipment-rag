@@ -15,7 +15,7 @@ import inspect
 from pathlib import Path
 import os
 from dotenv import load_dotenv
-from loguru import logger
+from loguru import logger as loguru_logger
 
 
 # -------------------------- 第一步：加载.env配置文件 --------------------------
@@ -61,11 +61,11 @@ def init_logger():
     :return: 配置完成的loguru logger实例
     """
     # 1. 移除loguru默认的控制台输出
-    logger.remove()
+    loguru_logger.remove()
 
     # 2. 配置控制台输出（若.env开启）
     if LOG_CONSOLE_ENABLE:
-        logger.add(
+        loguru_logger.add(
             sink=sys.stdout,
             level=LOG_CONSOLE_LEVEL,
             format=LOG_FORMAT,
@@ -76,7 +76,7 @@ def init_logger():
     # 3. 配置文件输出（若.env开启）
     if LOG_FILE_ENABLE:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
-        logger.add(
+        loguru_logger.add(
             sink=LOG_FILE_PATH,
             level=LOG_FILE_LEVEL,
             format=LOG_FORMAT,
@@ -88,7 +88,7 @@ def init_logger():
             diagnose=True
         )
 
-    return logger
+    return loguru_logger
 
 # -------------------------- 第六步：初始化并终极修正全局logger --------------------------
 base_logger = init_logger()

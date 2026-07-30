@@ -8,6 +8,7 @@ class QueryGraphState(TypedDict):
     """
 
     session_id: str  # 多轮会话唯一标识
+    tenant_id: str  # 调用方租户标识，用于数据面过滤
     trace_id: str  # 当前这一轮问答对应的Langfuse Trace ID
     original_query: str  # 用户原始问题
 

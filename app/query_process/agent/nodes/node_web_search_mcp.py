@@ -101,12 +101,12 @@ def node_web_search_mcp(state):
             # result.content[0].text 是一个 JSON 字符串，包含实际的搜索结果
             #
             # 示例数据结构：
-            # result.content[0].text = """
+            # 返回内容示例：result.content[0].text = """
             # {
-            #   "pages": [
+            # 示例字段："pages": [
             #     {
             #       "title": "HAK 180 烫金机使用手册",
-            #       "url": "http://example.com/manual",
+            # 示例地址："url": "http://example.com/manual",
             #       "snippet": "在出厂默认状态下，若想设置局部转印..."
             #     },
             #     ...

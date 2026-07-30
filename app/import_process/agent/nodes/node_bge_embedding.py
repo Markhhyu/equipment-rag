@@ -224,7 +224,7 @@ if __name__ == '__main__':
         result_chunks = result_state.get("chunks", [])
 
         # 打印测试结果统计
-        logger.info(f"=== 向量化节点本地测试完成 ===")
+        logger.info("=== 向量化节点本地测试完成 ===")
         logger.info(f"测试任务ID：{test_state.get('task_id')}")
         logger.info(f"待处理切片数：2 | 实际处理切片数：{len(result_chunks)}")
         logger.info(f"向量维度：{result_chunks}")

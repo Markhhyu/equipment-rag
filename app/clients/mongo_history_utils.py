@@ -62,14 +62,6 @@ class HistoryMongoTool:
 # 定义全局变量：存储HistoryMongoTool的单例实例
 # 作用：避免多次创建HistoryMongoTool实例，从而避免重复建立MongoDB连接
 _history_mongo_tool = None
-# 模块加载时尝试初始化单例实例，实现预加载
-# 目的：将数据库连接的初始化提前到模块加载阶段，避免第一次调用接口时才建立连接（提升首次响应速度）
-try:
-    _history_mongo_tool = HistoryMongoTool()
-except Exception as e:
-    # 初始化失败时仅记录警告日志，不抛出异常
-    # 原因：模块加载阶段的异常可能导致整个程序启动失败，此处保留懒加载兜底（get_history_mongo_tool会再次尝试创建）
-    logging.warning(f"Could not initialize HistoryMongoTool on module load: {e}")
 
 def get_history_mongo_tool() -> HistoryMongoTool:
     """

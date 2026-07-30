@@ -3,6 +3,7 @@ name = "equipment-rag"
 version = "0.1.0"
 description = "Enterprise-ready equipment knowledge RAG agent"
 requires-python = ">=3.14,<3.15"
+# 运行时依赖统一在这里声明，uv.lock 负责锁定实际安装版本。
 dependencies = [
     "fastapi>=0.141,<0.142",
     "flagembedding>=1.4,<2",
@@ -11,6 +12,7 @@ dependencies = [
     "langchain-community>=0.4.2,<0.5",
     "langchain-openai>=1.4,<2",
     "langgraph>=1.2,<2",
+    "langgraph-checkpoint-mongodb>=0.4,<0.5",
     "langfuse>=4.14,<5",
     "loguru>=0.7.3,<0.8",
     "minio>=7.2.20,<8",
@@ -19,7 +21,7 @@ dependencies = [
     "numpy>=2.5,<3",
     "openai-agents>=0.19,<1",
     "pymilvus[model]>=2.6.17,<2.7",
-    "pymongo>=4.17,<5",
+    "pymongo>=4.16,<4.17",
     "python-dotenv>=1.2.2,<2",
     "python-multipart>=0.0.32,<0.1",
     "regex>=2026.7.19",
@@ -30,9 +32,60 @@ dependencies = [
 ]
 
 [[tool.uv.index]]
+# PyTorch 单独使用官方 CPU 源，降低开源用户首次安装时的环境要求。
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
 [tool.uv.sources]
 torch = { index = "pytorch-cpu" }
+
+[dependency-groups]
+# 开发依赖只用于测试、覆盖率、代码检查和格式检查，不会进入生产镜像。
+dev = [
+    "pytest>=9.1,<10",
+    "pytest-asyncio>=1.4,<2",
+    "pytest-cov>=7.1,<8",
+    "ruff>=0.16,<0.17",
+]
+
+[tool.pytest.ini_options]
+# 测试至少保持 30% 总覆盖率；新增核心逻辑应优先补充针对性测试。
+addopts = "-p no:cacheprovider --strict-config --strict-markers --cov=app --cov-report=term-missing:skip-covered --cov-fail-under=30"
+asyncio_mode = "auto"
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+omit = [
+    "app/*/page/*",
+    "app/tool/*",
+]
+
+[tool.coverage.report]
+exclude_also = [
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+show_missing = true
+skip_covered = true
+
+[tool.ruff]
+# Ruff 同时负责静态检查和统一格式，目标版本必须与项目 Python 版本一致。
+line-length = 120
+target-version = "py314"
+exclude = ["test", "deploy"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+ignore = [
+    "E402",
+    "F401",
+    "F403",
+    "F405",
+    "F841",
+]
+
+[tool.ruff.format]
+line-ending = "lf"

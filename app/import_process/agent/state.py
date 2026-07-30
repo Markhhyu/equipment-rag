@@ -10,6 +10,7 @@ class ImportGraphState(TypedDict):
     使用字典式访问（如state["session_id"]、state.get("embedding_chunks")）
     """
     task_id: str  # 任务唯一ID，用于追踪日志
+    tenant_id: str  # 调用方租户标识，用于存储与检索隔离
 
     # --- 流程控制标记 ---
     is_md_read_enabled: bool  # 是否启用 Markdown 读取路径
@@ -52,6 +53,7 @@ class ImportGraphState(TypedDict):
 # 定义图状态的默认初始值
 graph_default_state: ImportGraphState = {
     "task_id": "",
+    "tenant_id": "local",
     "is_pdf_read_enabled": False,
     "is_md_read_enabled": False,
     "is_normal_split_enabled": True,
@@ -83,13 +85,13 @@ def create_default_state(**overrides) -> ImportGraphState:
     """
     创建默认状态，支持覆盖
 
-    Args:
+    参数：
         **overrides: 要覆盖的字段（关键字参数解包）
 
-    Returns:
+    返回：
         新的状态实例
 
-    Examples:
+    示例：
         state = create_default_state(task_id="task_001", local_file_path="doc.pdf")
     """
 

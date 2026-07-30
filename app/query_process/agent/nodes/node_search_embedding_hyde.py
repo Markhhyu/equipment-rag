@@ -7,6 +7,7 @@ from app.clients.milvus_utils import *
 from app.core.logger import logger
 from app.core.load_prompt import load_prompt
 from dotenv import load_dotenv, find_dotenv
+from app.security.tenancy import escape_milvus_literal, tenant_filter
 
 load_dotenv(find_dotenv())
 
@@ -51,6 +52,7 @@ def step_2_search_embedding_hyde(
     rewritten_query: str,
     hyde_doc: str,
     item_names=None,
+    tenant_id: str = "local",
     req_limit: int = 10,
     top_k: int = 5,
     ranker_weights=(0.8, 0.2),  # 调整默认权重以偏向稠密向量 (0.8, 0.2)
@@ -92,14 +94,15 @@ def step_2_search_embedding_hyde(
     logger.info(f"Step 2: 准备在集合 '{collection_name}' 中执行混合检索")
 
     # 构造过滤表达式 (如果有商品名限制)
-    expr = None
+    item_expression = None
     if item_names:
         # 处理 item_names 中的引号，防止注入或语法错误
-        quoted = ", ".join(f'"{v}"' for v in item_names)
-        expr = f"item_name in [{quoted}]"
-        logger.info(f"Step 2: 应用过滤条件: {expr}")
+        quoted = ", ".join(f'"{escape_milvus_literal(v)}"' for v in item_names)
+        item_expression = f"item_name in [{quoted}]"
     else:
         logger.info("Step 2: 未指定商品名过滤，将全库检索")
+    expr = tenant_filter(tenant_id, item_expression)
+    logger.info(f"Step 2: 应用租户过滤条件: {expr}")
 
     try:
         # 构造搜索请求
@@ -189,6 +192,7 @@ def node_search_embedding_hyde(state):
             rewritten_query=rewritten_query,
             hyde_doc=hyde_doc,
             item_names=item_names,
+            tenant_id=str(state.get("tenant_id") or "local"),
             top_k=5,
         )
         
