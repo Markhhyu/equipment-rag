@@ -20,7 +20,18 @@ def main() -> int:
     run("uv", "lock", "--check")
     run("uv", "pip", "check")
     run("uv", "run", "--frozen", "ruff", "check", "app", "tests", "scripts")
-    run("uv", "run", "--frozen", "ruff", "format", "--check", "app/evaluation", "tests", "scripts")
+    run(
+        "uv",
+        "run",
+        "--frozen",
+        "ruff",
+        "format",
+        "--check",
+        "app/evaluation",
+        "app/runtime",
+        "tests",
+        "scripts",
+    )
     run("uv", "run", "--frozen", "pytest")
     run(
         "uv",

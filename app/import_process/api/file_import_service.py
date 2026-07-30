@@ -21,6 +21,8 @@ from app.utils.task_utils import (
 )
 from app.import_process.agent.state import get_default_state
 from app.core.logger import logger  # 项目统一日志工具
+from app.runtime.config import load_runtime_config
+from app.runtime.run_store import get_run_store, run_owner
 
 # 初始化FastAPI应用实例
 # 标题和描述会在Swagger文档(http://ip:port/docs)中展示
@@ -73,7 +75,7 @@ async def get_import_page():
 # 后台任务：LangGraph全流程执行
 # 独立于主请求线程，由BackgroundTasks触发，避免阻塞接口响应
 # --------------------------
-def run_graph_task(task_id: str, local_dir: str, local_file_path: str):
+def run_graph_task(task_id: str, local_dir: str, local_file_path: str, resume: bool = False):
     """
     LangGraph全流程执行后台任务
     核心流程：初始化状态 → 流式执行图节点 → 实时更新任务状态 → 异常捕获
@@ -84,9 +86,23 @@ def run_graph_task(task_id: str, local_dir: str, local_file_path: str):
     :param local_dir: 该任务的本地文件存储目录（含临时文件/解析结果）
     :param local_file_path: 上传文件的本地绝对路径
     """
-    from app.import_process.agent.main_graph import kb_import_app
+    runtime_config = load_runtime_config()
+    run_store = get_run_store()
+    run_store.create(
+        task_id,
+        "import",
+        {
+            "local_dir": local_dir,
+            "local_file_path": local_file_path,
+        },
+        max_attempts=runtime_config.max_attempts,
+    )
+    owner = run_owner()
+    run_store.claim(task_id, owner, runtime_config.lease_seconds)
 
     try:
+        from app.import_process.agent.main_graph import kb_import_app
+
         # 1. 更新任务全局状态为：处理中
         update_task_status(task_id, "processing")
         logger.info(f"[{task_id}] 开始执行LangGraph全流程，本地文件路径：{local_file_path}")
@@ -98,7 +114,13 @@ def run_graph_task(task_id: str, local_dir: str, local_file_path: str):
         init_state["local_file_path"] = local_file_path  # 上传文件本地路径
 
         # 3. 流式执行LangGraph全流程（stream模式：实时获取每个节点的执行结果）
-        for event in kb_import_app.stream(init_state):
+        graph_input = None if resume else init_state
+        graph_config = {
+            "configurable": {"thread_id": task_id},
+            "metadata": {"task_id": task_id, "kind": "import"},
+        }
+        for event in kb_import_app.stream(graph_input, config=graph_config):
+            run_store.heartbeat(task_id, owner, runtime_config.lease_seconds)
             for node_name, node_result in event.items():
                 # 记录每个节点完成的日志，包含任务ID和节点名，方便追踪执行顺序
                 logger.info(f"[{task_id}] LangGraph节点执行完成：{node_name}")
@@ -107,11 +129,24 @@ def run_graph_task(task_id: str, local_dir: str, local_file_path: str):
 
         # 4. 全流程执行完成，更新任务全局状态为：已完成
         update_task_status(task_id, "completed")
+        run_store.complete(
+            task_id,
+            owner,
+            {
+                "task_id": task_id,
+                "local_file_path": local_file_path,
+                "done_list": get_done_task_list(task_id),
+            },
+        )
         logger.info(f"[{task_id}] LangGraph全流程执行完毕，任务完成")
 
     except Exception as e:
         # 5. 捕获全流程异常，更新任务全局状态为：失败，并记录错误日志（含堆栈）
         update_task_status(task_id, "failed")
+        try:
+            run_store.fail(task_id, owner, str(e))
+        except RuntimeError:
+            logger.exception("持久化导入运行失败状态时发生异常")
         logger.error(f"[{task_id}] LangGraph全流程执行失败，异常信息：{str(e)}", exc_info=True)
 
 
@@ -191,6 +226,16 @@ async def upload_files(background_tasks: BackgroundTasks, files: List[UploadFile
         add_done_task(task_id, "upload_file")
 
         # 8. 将LangGraph全流程处理加入FastAPI后台任务（异步执行，不阻塞当前接口响应）
+        runtime_config = load_runtime_config()
+        get_run_store().create(
+            task_id,
+            "import",
+            {
+                "local_dir": task_local_dir,
+                "local_file_path": local_file_abs_path,
+            },
+            max_attempts=runtime_config.max_attempts,
+        )
         background_tasks.add_task(run_graph_task, task_id, task_local_dir, local_file_abs_path)
         logger.info(f"[{task_id}] 已将LangGraph全流程加入后台任务，任务已启动")
 
@@ -213,7 +258,7 @@ async def get_task_progress(task_id: str):
     """
     任务状态查询接口
     前端轮询此接口（如每秒1次），获取任务的实时处理进度
-    返回数据均来自内存中的任务管理字典（task_utils.py），高性能无IO
+    节点展示进度来自进程内状态，运行状态与恢复信息来自持久化运行注册表。
 
     :param task_id: 全局唯一任务ID（由/upload接口返回）
     :return: 包含任务全局状态、已完成节点、运行中节点的JSON响应
@@ -226,10 +271,42 @@ async def get_task_progress(task_id: str):
         "done_list": get_done_task_list(task_id),  # 已完成的节点/阶段列表
         "running_list": get_running_task_list(task_id)  # 正在运行的节点/阶段列表
     }
+    durable_run = get_run_store().get(task_id)
+    if durable_run is not None and durable_run.kind == "import":
+        task_status_info["durable_run"] = durable_run.to_public_dict()
     # 记录状态查询日志，方便追踪前端轮询情况
     logger.info(
         f"[{task_id}] 任务状态查询，当前状态：{task_status_info['status']}，已完成节点：{task_status_info['done_list']}")
     return task_status_info
+
+
+@app.get("/runs/{run_id}", tags=["runtime"])
+async def get_run(run_id: str):
+    run = get_run_store().get(run_id)
+    if run is None or run.kind != "import":
+        raise HTTPException(status_code=404, detail="Import run not found")
+    return run.to_public_dict()
+
+
+@app.post("/runs/{run_id}/retry", status_code=202, tags=["runtime"])
+async def retry_run(run_id: str, background_tasks: BackgroundTasks):
+    run_store = get_run_store()
+    run = run_store.get(run_id)
+    if run is None or run.kind != "import":
+        raise HTTPException(status_code=404, detail="Import run not found")
+    try:
+        pending = run_store.request_retry(run_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    background_tasks.add_task(
+        run_graph_task,
+        run_id,
+        str(run.input["local_dir"]),
+        str(run.input["local_file_path"]),
+        True,
+    )
+    return pending.to_public_dict()
 
 
 # --------------------------

@@ -4,6 +4,7 @@ from app.query_process.agent.state import QueryGraphState
 from app.query_process.agent.nodes.node_item_name_confirm import node_item_name_confirm
 from app.query_process.agent.nodes.node_query_kg import node_query_kg
 from app.query_process.agent.nodes.node_answer_output import node_answer_output
+from app.runtime.checkpointing import get_checkpointer
 from app.query_process.agent.nodes.node_rerank import node_rerank
 from app.query_process.agent.nodes.node_rrf import node_rrf
 from app.query_process.agent.nodes.node_search_embedding import node_search_embedding
@@ -79,4 +80,4 @@ builder.add_edge("node_rerank", "node_answer_output")
 builder.add_edge("node_answer_output", END)
 
 # 编译生成可执行的 Runnable 应用
-query_app = builder.compile()
+query_app = builder.compile(checkpointer=get_checkpointer())

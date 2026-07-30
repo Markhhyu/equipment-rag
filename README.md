@@ -341,6 +341,17 @@ uv run python -m app.evaluation.cli replay \
   --fail-on-threshold
 ```
 
+### 运行恢复
+
+Docker Compose 默认把运行状态和 LangGraph checkpoint 保存到 MongoDB。进程异常退出后，可使用原 `trace_id` 或 `task_id` 查看并恢复运行：
+
+```text
+GET  /runs/{run_id}
+POST /runs/{run_id}/retry
+```
+
+恢复会从最后成功的 LangGraph 节点继续，并受租约和最大尝试次数保护。完整说明见 `docs/durable-runtime.md`。
+
 ### 环境变量
 
 完整模板见 `.env.example`。以下是主要配置：
@@ -555,6 +566,8 @@ uv run python -m app.import_process.api.file_import_service
 - Swagger：`http://127.0.0.1:8000/docs`
 - 上传接口：`POST http://127.0.0.1:8000/upload`
 - 任务状态：`GET http://127.0.0.1:8000/status/{task_id}`
+- 持久化运行：`GET http://127.0.0.1:8000/runs/{task_id}`
+- 失败恢复：`POST http://127.0.0.1:8000/runs/{task_id}/retry`
 
 ### 2. 查询服务
 
@@ -568,6 +581,8 @@ uv run python -m app.query_process.api.query_service
 - Swagger：`http://127.0.0.1:8001/docs`
 - 健康检查：`GET http://127.0.0.1:8001/health`
 - 问答接口：`POST http://127.0.0.1:8001/query`
+- 持久化运行：`GET http://127.0.0.1:8001/runs/{trace_id}`
+- 失败恢复：`POST http://127.0.0.1:8001/runs/{trace_id}/retry`
 - SSE：`GET http://127.0.0.1:8001/stream/{session_id}`
 - 会话历史：`GET http://127.0.0.1:8001/history/{session_id}`
 - 清空历史：`DELETE http://127.0.0.1:8001/history/{session_id}`
@@ -820,12 +835,12 @@ MONGO_DB_NAME=equipment_rag
 ## 当前限制
 
 1. **Neo4j 查询仍为预留节点**：当前 `node_query_kg` 尚未实现实际图谱查询和结果返回；
-2. **任务状态为进程内内存数据**：服务重启后任务状态丢失，不适合直接启用多 Worker；
+2. **SSE 连接和节点展示进度仍为进程内数据**：运行注册表与 checkpoint 已持久化，但自动分布式队列调度尚未接入；
 3. **开发环境默认开放 CORS**：生产环境必须限制允许访问的域名；
 4. **MinIO 当前配置了匿名读取策略**：生产环境需要结合网络隔离、签名 URL 或鉴权策略；
 5. **尚未接入用户和设备资料权限**：不同用户暂不能按厂区、岗位或设备范围隔离知识；
 6. **联网结果与本地 SOP 的可信级别尚未强制分层**；
-7. **尚未建立固定评测数据集和自动回归门禁**；
+7. **当前评测集为合成冒烟基线**：上线前仍需使用经过脱敏和授权的企业设备数据扩充；
 8. **本项目用于知识检索和辅助判断，不应直接替代设备安全规范、锁机挂牌流程或专业工程师确认。**
 
 ---
@@ -837,8 +852,8 @@ MONGO_DB_NAME=equipment_rag
 - [ ] 增加本地 SOP 优先级和联网资料可信等级；
 - [ ] 增加严格拒答与人工审核闭环；
 - [ ] 接入用户、角色、厂区和设备资料权限；
-- [ ] 将任务状态迁移至 Redis 或持久化任务队列；
-- [ ] 建立 Langfuse Dataset / RAGAS 自动化评测；
+- [x] 增加 MongoDB 运行注册表、LangGraph checkpoint 和失败恢复；
+- [x] 建立确定性评测数据集和自动回归门禁；
 - [ ] 增加设备告警分析 Agent；
 - [ ] 增加 OEE 分析 Agent 与 ECharts 展示；
 - [x] 增加 Docker Compose 一键启动方案；

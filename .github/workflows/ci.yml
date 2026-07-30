@@ -44,7 +44,7 @@ jobs:
         run: uv run --frozen ruff check app tests scripts
 
       - name: Check formatting
-        run: uv run --frozen ruff format --check app/evaluation tests scripts
+        run: uv run --frozen ruff format --check app/evaluation app/runtime tests scripts
 
       - name: Run tests
         run: uv run --frozen pytest

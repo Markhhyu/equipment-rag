@@ -11,6 +11,7 @@ dependencies = [
     "langchain-community>=0.4.2,<0.5",
     "langchain-openai>=1.4,<2",
     "langgraph>=1.2,<2",
+    "langgraph-checkpoint-mongodb>=0.4,<0.5",
     "langfuse>=4.14,<5",
     "loguru>=0.7.3,<0.8",
     "minio>=7.2.20,<8",
@@ -19,7 +20,7 @@ dependencies = [
     "numpy>=2.5,<3",
     "openai-agents>=0.19,<1",
     "pymilvus[model]>=2.6.17,<2.7",
-    "pymongo>=4.17,<5",
+    "pymongo>=4.16,<4.17",
     "python-dotenv>=1.2.2,<2",
     "python-multipart>=0.0.32,<0.1",
     "regex>=2026.7.19",
@@ -46,7 +47,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-addopts = "-p no:cacheprovider --strict-config --strict-markers --cov=app --cov-report=term-missing:skip-covered --cov-fail-under=20"
+addopts = "-p no:cacheprovider --strict-config --strict-markers --cov=app --cov-report=term-missing:skip-covered --cov-fail-under=25"
 asyncio_mode = "auto"
 pythonpath = ["."]
 testpaths = ["tests"]

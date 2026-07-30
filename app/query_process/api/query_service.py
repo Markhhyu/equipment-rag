@@ -14,6 +14,8 @@ from app.observability.langfuse_monitor import flush_langfuse
 from app.utils.task_utils import *
 from app.utils.sse_utils import create_sse_queue, SSEEvent, sse_generator
 from app.clients.mongo_history_utils import *
+from app.runtime.config import load_runtime_config
+from app.runtime.run_store import RunStatus, get_run_store, run_owner
 
 # Literal用于限制反馈值只能是0或1。
 from typing import Literal, Optional
@@ -107,7 +109,8 @@ def run_query_graph(
         session_id: str,
         user_query: str,
         is_stream: bool,
-        trace_id: str
+        trace_id: str,
+        resume: bool = False,
 ):
     """
     执行一次完整问答流程。
@@ -125,6 +128,22 @@ def run_query_graph(
         f"is_stream={is_stream}"
     )
 
+    runtime_config = load_runtime_config()
+    run_store = get_run_store()
+    run_input = {
+        "session_id": session_id,
+        "user_query": user_query,
+        "is_stream": is_stream,
+    }
+    run_store.create(
+        trace_id,
+        "query",
+        run_input,
+        max_attempts=runtime_config.max_attempts,
+    )
+    owner = run_owner()
+    run_store.claim(trace_id, owner, runtime_config.lease_seconds)
+
     # 构造LangGraph初始状态。
     # trace_id放入State后，后续回答节点可以将它保存到MongoDB。
     default_state = {
@@ -134,9 +153,9 @@ def run_query_graph(
         "is_stream": is_stream
     }
 
-    from app.query_process.agent.main_graph import query_app
-
     try:
+        from app.query_process.agent.main_graph import query_app
+
         # 创建本轮问答的Langfuse根Trace。
         with trace_query(
                 session_id=session_id,
@@ -148,6 +167,9 @@ def run_query_graph(
             # LangGraph运行配置。
             config = {
                 "run_name": "equipment-query-graph",
+                "configurable": {
+                    "thread_id": trace_id,
+                },
                 "tags": [
                     "equipment-rag",
                     "query"
@@ -163,11 +185,20 @@ def run_query_graph(
             if handler is not None:
                 config["callbacks"] = [handler]
 
-            # 执行完整LangGraph。
-            final_state = query_app.invoke(
-                default_state,
-                config=config
-            )
+            # 按节点边界流式执行并刷新租约。恢复时传入None，
+            # LangGraph会从该thread最后成功的checkpoint继续。
+            graph_input = None if resume else default_state
+            final_state = None
+            for state_snapshot in query_app.stream(
+                graph_input,
+                config=config,
+                stream_mode="values",
+            ):
+                final_state = state_snapshot
+                run_store.heartbeat(trace_id, owner, runtime_config.lease_seconds)
+
+            if final_state is None:
+                final_state = query_app.get_state(config).values
 
             # 写入自动基础评分。
             score_query_result(final_state)
@@ -212,11 +243,28 @@ def run_query_graph(
             is_stream
         )
 
+        retrieved_source_ids = []
+        for doc in final_state.get("reranked_docs") or []:
+            source_id = doc.get("chunk_id") or doc.get("url")
+            if source_id is not None:
+                retrieved_source_ids.append(str(source_id))
+        run_store.complete(
+            trace_id,
+            owner,
+            {
+                "session_id": session_id,
+                "trace_id": trace_id,
+                "answer": final_state.get("answer", ""),
+                "retrieved_source_ids": retrieved_source_ids,
+            },
+        )
+
         logger.info(
             f"问答流程执行完成，"
             f"session_id={session_id}，"
             f"trace_id={trace_id}"
         )
+        return final_state
 
     except Exception as e:
         logger.exception(
@@ -232,6 +280,10 @@ def run_query_graph(
             TASK_STATUS_FAILED,
             is_stream
         )
+        try:
+            run_store.fail(trace_id, owner, str(e))
+        except RuntimeError:
+            logger.exception("持久化问答运行失败状态时发生异常")
 
         # 流式问答发生异常时，将错误推送给页面。
         if is_stream:
@@ -243,6 +295,7 @@ def run_query_graph(
                     "trace_id": trace_id
                 }
             )
+        return None
 
 
 @app.post("/query")
@@ -261,6 +314,18 @@ async def query(background_tasks: BackgroundTasks, request: QueryRequest):
     # 每一次提问都生成独立Trace ID。
     # session_id代表整个对话，trace_id代表当前这一轮问答。
     trace_id = create_query_trace_id()
+    runtime_config = load_runtime_config()
+    run_store = get_run_store()
+    run_store.create(
+        trace_id,
+        "query",
+        {
+            "session_id": session_id,
+            "user_query": user_query,
+            "is_stream": request.is_stream,
+        },
+        max_attempts=runtime_config.max_attempts,
+    )
 
     # 处理是不是流式返回结果
     is_stream = request.is_stream
@@ -294,20 +359,60 @@ async def query(background_tasks: BackgroundTasks, request: QueryRequest):
         }
     else:
         # 同步运行
-        run_query_graph(
+        final_state = run_query_graph(
             session_id,
             user_query,
             is_stream,
             trace_id
         )
-        answer = get_task_result(session_id,"answer","")
+        run_record = run_store.get(trace_id)
+        if final_state is None or run_record is None or run_record.status == RunStatus.FAILED:
+            detail = run_record.error if run_record else "Agent run failed"
+            raise HTTPException(status_code=500, detail=detail)
+        answer = run_record.result.get("answer") or get_task_result(session_id, "answer", "")
         return {
             "message": "处理完成！",
             "session_id": session_id,
             "trace_id": trace_id,
             "answer": answer,
+            "retrieved_source_ids": run_record.result.get("retrieved_source_ids", []),
             "done_list": []
         }
+
+
+@app.get("/runs/{run_id}", tags=["runtime"])
+async def get_run(run_id: str):
+    run = get_run_store().get(run_id)
+    if run is None or run.kind != "query":
+        raise HTTPException(status_code=404, detail="Query run not found")
+    return run.to_public_dict()
+
+
+@app.post("/runs/{run_id}/retry", status_code=202, tags=["runtime"])
+async def retry_run(run_id: str, background_tasks: BackgroundTasks):
+    run_store = get_run_store()
+    run = run_store.get(run_id)
+    if run is None or run.kind != "query":
+        raise HTTPException(status_code=404, detail="Query run not found")
+    try:
+        pending = run_store.request_retry(run_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    session_id = str(run.input["session_id"])
+    is_stream = bool(run.input.get("is_stream", False))
+    if is_stream:
+        create_sse_queue(session_id)
+    background_tasks.add_task(
+        run_query_graph,
+        session_id,
+        str(run.input["user_query"]),
+        is_stream,
+        run_id,
+        True,
+    )
+    return pending.to_public_dict()
+
 
 @app.post("/feedback")
 async def submit_feedback(request: FeedbackRequest):
