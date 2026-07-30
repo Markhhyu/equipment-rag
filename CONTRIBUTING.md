@@ -30,9 +30,12 @@ Ruff is the source of truth for linting and formatting:
 
 ```bash
 uv run ruff check app tests scripts
-uv run ruff format app/evaluation app/runtime tests scripts
+uv run ruff format app/evaluation app/runtime app/security tests scripts
 ```
 
 The legacy `test/` directory contains manual integration scripts. New automated
 tests belong in `tests/` and must be deterministic without external credentials
 or running middleware.
+
+Security-sensitive changes must include tenant-boundary tests. Do not accept
+`tenant_id` from request bodies; derive it from the authenticated principal.

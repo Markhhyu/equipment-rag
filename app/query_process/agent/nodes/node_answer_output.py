@@ -6,6 +6,7 @@ from app.core.logger import logger
 from app.core.load_prompt import load_prompt
 from app.lm.lm_utils import get_llm_client
 from app.clients.mongo_history_utils import save_chat_message
+from app.clients.minio_utils import resolve_object_urls
 import re
 
 _IMAGE_BLOCK_MARKER = "【图片】"
@@ -323,13 +324,14 @@ def node_answer_output(state: QueryGraphState) -> QueryGraphState:
     # 阶段三：  如果没有answer则 调用大模型输出答案
     step_3_generate_response(state, prompt)
 
-  # 提取图片URL（用于历史记录和前端展示）
-  image_urls = _extract_images_from_docs(state.get("reranked_docs") or [])
+  # 历史记录保存稳定对象引用；返回浏览器时再生成短期签名URL。
+  image_object_refs = _extract_images_from_docs(state.get("reranked_docs") or [])
+  image_urls = resolve_object_urls(image_object_refs)
 
   # 阶段四：把答案写入到mongodb的history中
   if state.get("answer"):
     logger.info("---写入MongoDB历史记录---")
-    step_4_write_history(state, image_urls=image_urls)
+    step_4_write_history(state, image_urls=image_object_refs)
 
   add_done_task(state['session_id'], sys._getframe().f_code.co_name, state.get("is_stream"))
   

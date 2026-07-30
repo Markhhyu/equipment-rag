@@ -29,6 +29,7 @@ def main() -> int:
         "--check",
         "app/evaluation",
         "app/runtime",
+        "app/security",
         "tests",
         "scripts",
     )

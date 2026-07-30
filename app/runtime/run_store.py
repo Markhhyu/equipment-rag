@@ -27,6 +27,7 @@ class RunRecord:
     run_id: str
     kind: str
     input: dict[str, Any]
+    tenant_id: str = "local"
     status: RunStatus = RunStatus.PENDING
     attempt: int = 0
     max_attempts: int = 3
@@ -43,6 +44,7 @@ class RunRecord:
             run_id=document["run_id"],
             kind=document["kind"],
             input=document.get("input") or {},
+            tenant_id=document.get("tenant_id") or "local",
             status=RunStatus(document["status"]),
             attempt=int(document.get("attempt", 0)),
             max_attempts=int(document.get("max_attempts", 3)),
@@ -59,6 +61,7 @@ class RunRecord:
             "run_id": self.run_id,
             "kind": self.kind,
             "input": deepcopy(self.input),
+            "tenant_id": self.tenant_id,
             "status": self.status.value,
             "attempt": self.attempt,
             "max_attempts": self.max_attempts,
@@ -76,6 +79,7 @@ class RunRecord:
         return {
             "run_id": self.run_id,
             "kind": self.kind,
+            "tenant_id": self.tenant_id,
             "status": self.status.value,
             "attempt": self.attempt,
             "max_attempts": self.max_attempts,
@@ -90,12 +94,25 @@ class RunRecord:
 
 class RunStore(ABC):
     @abstractmethod
-    def create(self, run_id: str, kind: str, input_data: dict[str, Any], max_attempts: int) -> RunRecord:
+    def create(
+        self,
+        run_id: str,
+        kind: str,
+        input_data: dict[str, Any],
+        max_attempts: int,
+        tenant_id: str = "local",
+    ) -> RunRecord:
         raise NotImplementedError
 
     @abstractmethod
     def get(self, run_id: str) -> RunRecord | None:
         raise NotImplementedError
+
+    def get_for_tenant(self, run_id: str, tenant_id: str) -> RunRecord | None:
+        record = self.get(run_id)
+        if record is None or record.tenant_id != tenant_id:
+            return None
+        return record
 
     @abstractmethod
     def claim(self, run_id: str, owner: str, lease_seconds: int) -> RunRecord:
@@ -124,11 +141,18 @@ class InMemoryRunStore(RunStore):
         self._lock = RLock()
         self._clock = clock or (lambda: datetime.now(UTC))
 
-    def create(self, run_id: str, kind: str, input_data: dict[str, Any], max_attempts: int) -> RunRecord:
+    def create(
+        self,
+        run_id: str,
+        kind: str,
+        input_data: dict[str, Any],
+        max_attempts: int,
+        tenant_id: str = "local",
+    ) -> RunRecord:
         with self._lock:
             existing = self._records.get(run_id)
             if existing is not None:
-                if existing.kind != kind or existing.input != input_data:
+                if existing.kind != kind or existing.input != input_data or existing.tenant_id != tenant_id:
                     raise ValueError(f"run_id {run_id!r} already exists with different input")
                 return deepcopy(existing)
             record = RunRecord(
@@ -136,6 +160,7 @@ class InMemoryRunStore(RunStore):
                 kind=kind,
                 input=deepcopy(input_data),
                 max_attempts=max_attempts,
+                tenant_id=tenant_id,
             )
             self._records[run_id] = record
             return deepcopy(record)
@@ -229,12 +254,27 @@ class MongoRunStore(RunStore):
         self._client = MongoClient(mongo_url, appname="equipment-rag-runs", tz_aware=True)
         self._collection = self._client[database][collection]
         self._collection.create_index([("run_id", ASCENDING)], unique=True)
-        self._collection.create_index([("status", ASCENDING), ("lease_expires_at", ASCENDING)])
+        self._collection.create_index(
+            [("tenant_id", ASCENDING), ("status", ASCENDING), ("lease_expires_at", ASCENDING)]
+        )
 
-    def create(self, run_id: str, kind: str, input_data: dict[str, Any], max_attempts: int) -> RunRecord:
+    def create(
+        self,
+        run_id: str,
+        kind: str,
+        input_data: dict[str, Any],
+        max_attempts: int,
+        tenant_id: str = "local",
+    ) -> RunRecord:
         from pymongo.errors import DuplicateKeyError
 
-        record = RunRecord(run_id=run_id, kind=kind, input=deepcopy(input_data), max_attempts=max_attempts)
+        record = RunRecord(
+            run_id=run_id,
+            kind=kind,
+            input=deepcopy(input_data),
+            max_attempts=max_attempts,
+            tenant_id=tenant_id,
+        )
         try:
             self._collection.insert_one(record.to_document())
             return record
@@ -242,7 +282,7 @@ class MongoRunStore(RunStore):
             existing = self.get(run_id)
             if existing is None:
                 raise
-            if existing.kind != kind or existing.input != input_data:
+            if existing.kind != kind or existing.input != input_data or existing.tenant_id != tenant_id:
                 raise ValueError(f"run_id {run_id!r} already exists with different input") from None
             return existing
 

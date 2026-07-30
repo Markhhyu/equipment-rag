@@ -14,6 +14,7 @@ from app.lm.embedding_utils import generate_embeddings
 from app.clients.milvus_utils import get_milvus_client, create_hybrid_search_requests, hybrid_search
 from dotenv import load_dotenv, find_dotenv
 from app.core.logger import logger
+from app.security.tenancy import tenant_filter
 
 load_dotenv(find_dotenv())
 
@@ -78,7 +79,7 @@ def step_3_extract_info(query: str, history: List[Dict]) -> Dict:
         return {"item_names": [], "rewritten_query": query}
 
 
-def step_4_vectorize_and_query(item_names: List[str]) -> List[Dict]:
+def step_4_vectorize_and_query(item_names: List[str], tenant_id: str = "local") -> List[Dict]:
     """
     对提取的 item_names 进行向量化并在 Milvus 中进行混合搜索
     """
@@ -109,6 +110,7 @@ def step_4_vectorize_and_query(item_names: List[str]) -> List[Dict]:
                 reqs = create_hybrid_search_requests(
                     dense_vector=dense_vector,
                     sparse_vector=sparse_vector,
+                    expr=tenant_filter(tenant_id),
                     limit=5
                 )
 
@@ -340,7 +342,7 @@ def node_item_name_confirm(state: QueryGraphState) -> QueryGraphState:
 
     # 4. & 5. 如果有提取到商品名，进行搜索和对齐
     if len(item_names) > 0:
-        query_results = step_4_vectorize_and_query(item_names)
+        query_results = step_4_vectorize_and_query(item_names, str(state.get("tenant_id") or "local"))
         align_result = step_5_align_item_names(query_results)
     else:
         logger.info("Node: 未提取到商品名，跳过向量检索")

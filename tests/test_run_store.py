@@ -63,3 +63,12 @@ def test_wrong_owner_and_conflicting_idempotency_are_rejected():
         store.complete("run-4", "worker-2", {})
     with pytest.raises(ValueError, match="different input"):
         store.create("run-4", "query", {"query": "two"}, max_attempts=3)
+
+
+def test_run_lookup_is_tenant_scoped():
+    store = InMemoryRunStore()
+    store.create("run-5", "query", {"query": "status"}, max_attempts=3, tenant_id="tenant-a")
+
+    assert store.get_for_tenant("run-5", "tenant-a") is not None
+    assert store.get_for_tenant("run-5", "tenant-b") is None
+    assert store.get("run-5").to_public_dict()["tenant_id"] == "tenant-a"

@@ -10,6 +10,7 @@ from app.utils.task_utils import add_running_task
 from app.core.logger import logger
 from app.conf.milvus_config import milvus_config
 from app.utils.escape_milvus_string_utils import escape_milvus_string
+from app.security.tenancy import tenant_filter
 
 # 从配置文件读取切片集合名称，与配置解耦，便于环境切换
 CHUNKS_COLLECTION_NAME = milvus_config.chunks_collection
@@ -48,6 +49,9 @@ def node_import_milvus(state: Dict[str, Any]) -> Dict[str, Any]:
     logger.info("--- Milvus切片数据入库流程启动 ---")
 
     try:
+        tenant_id = str(state.get("tenant_id") or "local")
+        for chunk in state.get("chunks") or []:
+            chunk["tenant_id"] = tenant_id
         # 步骤1：输入数据有效性校验
         chunks_json_data, vector_dimension = step_1_check_input(state)
         # 步骤2：Milvus客户端连接+集合准备（自动建表）
@@ -127,6 +131,7 @@ def create_collection(client, collection_name: str, vector_dimension: int):
     schema.add_field(field_name="part", datatype=DataType.INT8)  # 分片编号
     schema.add_field(field_name="file_title", datatype=DataType.VARCHAR, max_length=65535)  # 源文件标题
     schema.add_field(field_name="item_name", datatype=DataType.VARCHAR, max_length=65535)  # 商品名称（幂等性依据）
+    schema.add_field(field_name="tenant_id", datatype=DataType.VARCHAR, max_length=64)
     schema.add_field(field_name="sparse_vector", datatype=DataType.SPARSE_FLOAT_VECTOR)  # 稀疏向量
     schema.add_field(field_name="dense_vector", datatype=DataType.FLOAT_VECTOR, dim=vector_dimension)  # 稠密向量
     # 对于 BGE-M3 模型 ：
@@ -232,10 +237,11 @@ def step_3_clean_old_data(client, chunks_json_data: List[Dict[str, Any]]):
 
     # 遍历item_name，逐个清理旧数据
     for i_name in item_names:
-        _clear_chunks_by_item_name(client, CHUNKS_COLLECTION_NAME, i_name)
+        tenant_id = str(chunks_json_data[0].get("tenant_id") or "local")
+        _clear_chunks_by_item_name(client, CHUNKS_COLLECTION_NAME, i_name, tenant_id)
 
 
-def _clear_chunks_by_item_name(client, collection_name: str, item_name: str):
+def _clear_chunks_by_item_name(client, collection_name: str, item_name: str, tenant_id: str = "local"):
     """
     内部核心函数：根据item_name删除Milvus中的旧切片数据
     参数：
@@ -262,7 +268,7 @@ def _clear_chunks_by_item_name(client, collection_name: str, item_name: str):
 
         # 1. 商品名称安全转义，避免filter表达式报错
         safe_item_name = escape_milvus_string(i_name)
-        filter_expr = f'item_name == "{safe_item_name}"'
+        filter_expr = tenant_filter(tenant_id, f'item_name == "{safe_item_name}"')
         logger.info(f"Milvus幂等性清理：开始删除集合{collection_name}中item_name={i_name}的旧数据")
 
         # 2. 执行删除操作

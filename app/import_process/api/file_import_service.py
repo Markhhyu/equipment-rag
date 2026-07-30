@@ -1,12 +1,10 @@
 import os
-import shutil
 import uuid
 from typing import List, Dict, Any
 from datetime import datetime
 import uvicorn
 # 第三方库
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import FileResponse
 # 项目内部工具/配置/客户端
 from app.clients.minio_utils import get_minio_client
@@ -23,6 +21,10 @@ from app.import_process.agent.state import get_default_state
 from app.core.logger import logger  # 项目统一日志工具
 from app.runtime.config import load_runtime_config
 from app.runtime.run_store import get_run_store, run_owner
+from app.security.auth import Principal, require_role
+from app.security.config import load_security_config
+from app.security.http import configure_http_security
+from app.security.tenancy import safe_upload_filename, tenant_object_prefix
 
 # 初始化FastAPI应用实例
 # 标题和描述会在Swagger文档(http://ip:port/docs)中展示
@@ -31,14 +33,7 @@ app = FastAPI(
     description="Web service for uploading files to Knowledge Base (PDF/MD → 解析 → 切分 → 向量化 → Milvus/KG入库)"
 )
 
-# 跨域中间件配置：解决前端调用后端接口的跨域限制
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # 允许所有前端域名访问（生产环境建议指定具体域名）
-    allow_credentials=True,  # 允许携带Cookie等认证信息
-    allow_methods=["*"],  # 允许所有HTTP方法（GET/POST/PUT/DELETE等）
-    allow_headers=["*"],  # 允许所有请求头
-)
+configure_http_security(app)
 
 
 @app.get("/health", tags=["system"])
@@ -75,7 +70,13 @@ async def get_import_page():
 # 后台任务：LangGraph全流程执行
 # 独立于主请求线程，由BackgroundTasks触发，避免阻塞接口响应
 # --------------------------
-def run_graph_task(task_id: str, local_dir: str, local_file_path: str, resume: bool = False):
+def run_graph_task(
+    task_id: str,
+    local_dir: str,
+    local_file_path: str,
+    resume: bool = False,
+    tenant_id: str = "local",
+):
     """
     LangGraph全流程执行后台任务
     核心流程：初始化状态 → 流式执行图节点 → 实时更新任务状态 → 异常捕获
@@ -96,6 +97,7 @@ def run_graph_task(task_id: str, local_dir: str, local_file_path: str, resume: b
             "local_file_path": local_file_path,
         },
         max_attempts=runtime_config.max_attempts,
+        tenant_id=tenant_id,
     )
     owner = run_owner()
     run_store.claim(task_id, owner, runtime_config.lease_seconds)
@@ -110,6 +112,7 @@ def run_graph_task(task_id: str, local_dir: str, local_file_path: str, resume: b
         # 2. 初始化LangGraph状态：加载默认状态 + 注入当前任务的核心参数
         init_state = get_default_state()
         init_state["task_id"] = task_id  # 任务ID关联
+        init_state["tenant_id"] = tenant_id
         init_state["local_dir"] = local_dir  # 任务本地目录
         init_state["local_file_path"] = local_file_path  # 上传文件本地路径
 
@@ -117,7 +120,7 @@ def run_graph_task(task_id: str, local_dir: str, local_file_path: str, resume: b
         graph_input = None if resume else init_state
         graph_config = {
             "configurable": {"thread_id": task_id},
-            "metadata": {"task_id": task_id, "kind": "import"},
+            "metadata": {"task_id": task_id, "kind": "import", "tenant_id": tenant_id},
         }
         for event in kb_import_app.stream(graph_input, config=graph_config):
             run_store.heartbeat(task_id, owner, runtime_config.lease_seconds)
@@ -156,7 +159,11 @@ def run_graph_task(task_id: str, local_dir: str, local_file_path: str, resume: b
 # 访问地址：http://localhost:8000/upload （POST请求，form-data格式传参）
 # --------------------------
 @app.post("/upload", summary="文件上传接口", description="支持多文件批量上传，自动触发知识库导入全流程")
-async def upload_files(background_tasks: BackgroundTasks, files: List[UploadFile] = File(...)):
+async def upload_files(
+    background_tasks: BackgroundTasks,
+    files: List[UploadFile] = File(...),
+    principal: Principal = Depends(require_role("import")),
+):
     """
     文件上传核心接口
     1. 接收前端上传的多文件（PDF/MD为主）
@@ -169,17 +176,35 @@ async def upload_files(background_tasks: BackgroundTasks, files: List[UploadFile
     :param files: 前端上传的文件列表（form-data格式）
     :return: 包含上传结果和所有任务ID的JSON响应
     """
-    # 1. 构建本地存储根目录：项目根目录/output/YYYYMMDD（按日期分层，方便管理）
-    date_based_root_dir = os.path.join(PROJECT_ROOT / "output", datetime.now().strftime("%Y%m%d"))
+    security_config = load_security_config()
+    validated_uploads: list[tuple[UploadFile, str]] = []
+    for upload in files:
+        try:
+            filename = safe_upload_filename(upload.filename, security_config.allowed_upload_extensions)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if upload.size is not None and upload.size > security_config.max_upload_bytes:
+            raise HTTPException(status_code=413, detail="Uploaded file exceeds MAX_UPLOAD_BYTES")
+        validated_uploads.append((upload, filename))
+
+    # 本地文件按租户、日期和任务ID隔离。
+    date_based_root_dir = os.path.join(
+        PROJECT_ROOT / "output" / "tenants",
+        principal.tenant_id,
+        datetime.now().strftime("%Y%m%d"),
+    )
     # 初始化任务ID列表，用于返回给前端（一个文件对应一个TaskID）
     task_ids = []
 
     # 2. 遍历处理每个上传的文件（多文件批量处理，各自独立生成TaskID）
-    for file in files:
+    for file, filename in validated_uploads:
         # 生成全局唯一TaskID（UUID4），作为单个文件的全流程标识
         task_id = str(uuid.uuid4())
         task_ids.append(task_id)
-        logger.info(f"[{task_id}] 开始处理上传文件，文件名：{file.filename}，文件类型：{file.content_type}")
+        logger.info(
+            f"[{task_id}] 开始处理上传文件，tenant_id={principal.tenant_id}，"
+            f"文件名：{filename}，文件类型：{file.content_type}"
+        )
 
         # 3. 标记「文件上传」阶段为「运行中」，前端轮询可查
         add_running_task(task_id, "upload_file")
@@ -188,18 +213,31 @@ async def upload_files(background_tasks: BackgroundTasks, files: List[UploadFile
         task_local_dir = os.path.join(date_based_root_dir, task_id)
         os.makedirs(task_local_dir, exist_ok=True)  # 目录不存在则创建，存在则不做处理
         # 构建上传文件的本地保存绝对路径
-        local_file_abs_path = os.path.join(task_local_dir, file.filename)
+        local_file_abs_path = os.path.join(task_local_dir, filename)
 
-        # 5. 将上传的文件保存到本地临时目录（后续MinIO上传/文件解析均基于此文件）
+        # 5. 分块写入并限制大小，避免单个请求耗尽磁盘。
+        total_bytes = 0
         with open(local_file_abs_path, "wb") as file_buffer:
-            shutil.copyfileobj(file.file, file_buffer)
+            while chunk := file.file.read(1024 * 1024):
+                total_bytes += len(chunk)
+                if total_bytes > security_config.max_upload_bytes:
+                    file_buffer.close()
+                    os.remove(local_file_abs_path)
+                    raise HTTPException(status_code=413, detail="Uploaded file exceeds MAX_UPLOAD_BYTES")
+                file_buffer.write(chunk)
         logger.info(f"[{task_id}] 文件已保存至本地，路径：{local_file_abs_path}")
 
         # 6. 将本地文件上传至MinIO对象存储，做持久化保存
         # 从环境变量获取MinIO的PDF存储目录配置
         minio_pdf_base_dir = os.getenv("MINIO_PDF_DIR", "pdf_files")  # 缺省值：pdf_files
         # 构建MinIO中的文件对象名：配置目录/YYYYMMDD/文件名（按日期分层，和本地一致）
-        minio_object_name = f"{minio_pdf_base_dir}/{datetime.now().strftime('%Y%m%d')}/{file.filename}"
+        minio_object_name = tenant_object_prefix(
+            principal.tenant_id,
+            minio_pdf_base_dir,
+            datetime.now().strftime("%Y%m%d"),
+            task_id,
+            filename,
+        )
         try:
             # 获取MinIO客户端实例
             minio_client = get_minio_client()
@@ -235,8 +273,16 @@ async def upload_files(background_tasks: BackgroundTasks, files: List[UploadFile
                 "local_file_path": local_file_abs_path,
             },
             max_attempts=runtime_config.max_attempts,
+            tenant_id=principal.tenant_id,
         )
-        background_tasks.add_task(run_graph_task, task_id, task_local_dir, local_file_abs_path)
+        background_tasks.add_task(
+            run_graph_task,
+            task_id,
+            task_local_dir,
+            local_file_abs_path,
+            False,
+            principal.tenant_id,
+        )
         logger.info(f"[{task_id}] 已将LangGraph全流程加入后台任务，任务已启动")
 
     # 9. 所有文件处理完毕，返回上传成功信息和所有TaskID（前端基于TaskID轮询进度）
@@ -254,7 +300,10 @@ async def upload_files(background_tasks: BackgroundTasks, files: List[UploadFile
 # 访问地址：http://localhost:8000/status/{task_id} （GET请求）
 # --------------------------
 @app.get("/status/{task_id}", summary="任务状态查询", description="根据TaskID查询单个文件的处理进度和全局状态")
-async def get_task_progress(task_id: str):
+async def get_task_progress(
+    task_id: str,
+    principal: Principal = Depends(require_role("import")),
+):
     """
     任务状态查询接口
     前端轮询此接口（如每秒1次），获取任务的实时处理进度
@@ -263,6 +312,9 @@ async def get_task_progress(task_id: str):
     :param task_id: 全局唯一任务ID（由/upload接口返回）
     :return: 包含任务全局状态、已完成节点、运行中节点的JSON响应
     """
+    durable_run = get_run_store().get_for_tenant(task_id, principal.tenant_id)
+    if durable_run is None or durable_run.kind != "import":
+        raise HTTPException(status_code=404, detail="Import run not found")
     # 构造任务状态返回体
     task_status_info: Dict[str, Any] = {
         "code": 200,
@@ -271,9 +323,7 @@ async def get_task_progress(task_id: str):
         "done_list": get_done_task_list(task_id),  # 已完成的节点/阶段列表
         "running_list": get_running_task_list(task_id)  # 正在运行的节点/阶段列表
     }
-    durable_run = get_run_store().get(task_id)
-    if durable_run is not None and durable_run.kind == "import":
-        task_status_info["durable_run"] = durable_run.to_public_dict()
+    task_status_info["durable_run"] = durable_run.to_public_dict()
     # 记录状态查询日志，方便追踪前端轮询情况
     logger.info(
         f"[{task_id}] 任务状态查询，当前状态：{task_status_info['status']}，已完成节点：{task_status_info['done_list']}")
@@ -281,17 +331,21 @@ async def get_task_progress(task_id: str):
 
 
 @app.get("/runs/{run_id}", tags=["runtime"])
-async def get_run(run_id: str):
-    run = get_run_store().get(run_id)
+async def get_run(run_id: str, principal: Principal = Depends(require_role("import"))):
+    run = get_run_store().get_for_tenant(run_id, principal.tenant_id)
     if run is None or run.kind != "import":
         raise HTTPException(status_code=404, detail="Import run not found")
     return run.to_public_dict()
 
 
 @app.post("/runs/{run_id}/retry", status_code=202, tags=["runtime"])
-async def retry_run(run_id: str, background_tasks: BackgroundTasks):
+async def retry_run(
+    run_id: str,
+    background_tasks: BackgroundTasks,
+    principal: Principal = Depends(require_role("import")),
+):
     run_store = get_run_store()
-    run = run_store.get(run_id)
+    run = run_store.get_for_tenant(run_id, principal.tenant_id)
     if run is None or run.kind != "import":
         raise HTTPException(status_code=404, detail="Import run not found")
     try:
@@ -305,6 +359,7 @@ async def retry_run(run_id: str, background_tasks: BackgroundTasks):
         str(run.input["local_dir"]),
         str(run.input["local_file_path"]),
         True,
+        principal.tenant_id,
     )
     return pending.to_public_dict()
 

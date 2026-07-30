@@ -23,6 +23,7 @@ from app.utils.normalize_sparse_vector import normalize_sparse_vector
 from app.utils.task_utils import add_running_task
 # 7. 日志工具：项目统一日志入口，分级输出（info/warning/error）
 from app.core.logger import logger
+from app.security.tenancy import tenant_filter
 # 8. 提示词工具：加载本地prompt模板，实现提示词与代码解耦
 from app.core.load_prompt import load_prompt
 
@@ -329,6 +330,11 @@ def step_6_save_to_milvus(state: ImportGraphState, file_title: str, item_name: s
                 datatype=DataType.VARCHAR,
                 max_length=65535
             )
+            schema.add_field(
+                field_name="tenant_id",
+                datatype=DataType.VARCHAR,
+                max_length=64,
+            )
             # 添加稠密向量字段：FLOAT_VECTOR，1024维（BGE-M3固定维度）
             schema.add_field(
                 field_name="dense_vector",
@@ -378,7 +384,8 @@ def step_6_save_to_milvus(state: ImportGraphState, file_title: str, item_name: s
             client.load_collection(collection_name=collection_name)
             # 商品名称转义，防止特殊字符导致过滤表达式解析失败
             safe_item_name = escape_milvus_string(clean_item_name)
-            filter_expr = f'item_name=="{safe_item_name}"'
+            tenant_id = str(state.get("tenant_id") or "local")
+            filter_expr = tenant_filter(tenant_id, f'item_name=="{safe_item_name}"')
             # 执行删除操作
             client.delete(collection_name=collection_name, filter=filter_expr)
             logger.info(f"Milvus幂等性处理完成，已删除集合中[{clean_item_name}]的历史数据")
@@ -386,7 +393,8 @@ def step_6_save_to_milvus(state: ImportGraphState, file_title: str, item_name: s
         # 构造插入Milvus的数据：基础字段+非空向量字段
         data = {
             "file_title": file_title,
-            "item_name": item_name
+            "item_name": item_name,
+            "tenant_id": str(state.get("tenant_id") or "local"),
         }
         # 稠密向量非空才添加，避免空值入库报错
         if dense_vector is not None:

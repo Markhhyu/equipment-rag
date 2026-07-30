@@ -18,6 +18,7 @@ from app.utils.task_utils import (
     add_done_task,
     add_running_task
 )
+from app.security.tenancy import escape_milvus_literal, tenant_filter
 
 
 # 加载项目.env配置。
@@ -157,13 +158,16 @@ def node_search_embedding(state):
     # 将每一个商品或设备名称加上双引号，
     # 拼接为Milvus支持的in过滤表达式。
     quoted_item_names = ", ".join(
-        f'"{item_name}"'
+        f'"{escape_milvus_literal(item_name)}"'
         for item_name in item_names
     )
 
     # 示例：
     # item_name in ["RS-12数字万用表"]
-    expr = f"item_name in [{quoted_item_names}]"
+    expr = tenant_filter(
+        str(state.get("tenant_id") or "local"),
+        f"item_name in [{quoted_item_names}]",
+    )
 
     logger.info(
         f"Milvus检索集合={collection_name}，过滤条件={expr}"
