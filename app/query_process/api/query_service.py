@@ -14,7 +14,6 @@ from app.observability.langfuse_monitor import flush_langfuse, trace_query
 from app.utils.task_utils import *
 from app.utils.sse_utils import create_sse_queue, SSEEvent, sse_generator
 from app.clients.mongo_history_utils import *
-from app.query_process.agent.main_graph import query_app
 
 # Literal用于限制反馈值只能是0或1。
 from typing import Literal, Optional
@@ -134,6 +133,8 @@ def run_query_graph(
         "trace_id": trace_id,
         "is_stream": is_stream
     }
+
+    from app.query_process.agent.main_graph import query_app
 
     try:
         # 创建本轮问答的Langfuse根Trace。

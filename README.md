@@ -6,7 +6,7 @@
 
 基于 **LangGraph + MinerU + BGE-M3 + Milvus + Reranker + MCP + Langfuse** 构建，覆盖设备文档导入、结构化解析、混合检索、多轮问答、流式输出、质量追踪与用户反馈闭环。
 
-![Python](https://img.shields.io/badge/Python-3.12-3776AB)
+![Python](https://img.shields.io/badge/Python-3.14-3776AB)
 ![LangGraph](https://img.shields.io/badge/LangGraph-Agent-1C3C3C)
 ![FastAPI](https://img.shields.io/badge/FastAPI-Service-009688)
 ![Milvus](https://img.shields.io/badge/Milvus-Hybrid_Search-00A1EA)
@@ -35,7 +35,7 @@ Equipment RAG Agent 面向制造业设备知识管理与现场运维场景，目
 - 对模糊型号进行澄清，避免检索到错误设备资料；
 - 通过 Langfuse Trace 和用户反馈定位低质量回答。
 
-> 当前开发版本以 `beta` 分支为准。
+> 稳定版本以 `main` 分支为准，功能升级通过独立 Pull Request 合入。
 
 ---
 
@@ -282,29 +282,53 @@ equipment-rag/
 
 ## 快速开始
 
-### 1. 克隆项目
+### Docker 一条命令启动（推荐）
 
 ```bash
-git clone -b beta https://github.com/Markhhyu/equipment-rag.git
+git clone https://github.com/Markhhyu/equipment-rag.git
 cd equipment-rag
+docker compose up --build
 ```
 
-### 2. 安装主项目依赖
+该命令会同时启动查询 API、导入 API、MongoDB、MinIO、etcd 和 Milvus，无需先创建 `.env`。首次启动需要下载 Python 依赖和 BGE 模型，请耐心等待。
+
+启动后可访问：
+
+- 聊天页面：`http://localhost:8001/chat.html`
+- 导入页面：`http://localhost:8000/import.html`
+- 查询 API 文档：`http://localhost:8001/docs`
+- 导入 API 文档：`http://localhost:8000/docs`
+- MinIO 控制台：`http://localhost:9001`
+
+要真正调用 LLM，请复制配置模板并填写自己的 OpenAI-Compatible API：
 
 ```bash
-uv sync
+cp .env.example .env
+docker compose up --build
 ```
 
-验证环境：
+Windows PowerShell：
+
+```powershell
+Copy-Item .env.example .env
+docker compose up --build
+```
+
+> Markdown 文件导入无需 MinerU；PDF 解析需要另行启动 MinerU，默认地址为宿主机 `8002` 端口。Langfuse、Neo4j 和 MCP WebSearch 也是可选集成。
+
+### 本地 Python 开发
+
+项目使用 Python 3.14 和 uv。依赖版本已写入 `uv.lock`：
 
 ```bash
-uv run python -c "import sys; print(sys.version)"
-uv run python -c "import torch; print(torch.__version__); print(torch.cuda.is_available())"
+uv sync --frozen
+uv run uvicorn app.import_process.api.file_import_service:app --host 127.0.0.1 --port 8000
+uv run uvicorn app.query_process.api.query_service:app --host 127.0.0.1 --port 8001
 ```
 
-### 3. 创建 `.env`
+### 环境变量
 
-在项目根目录创建 `.env`：
+完整模板见 `.env.example`。以下是主要配置：
 
 ```env
 # =========================================================
@@ -321,8 +345,8 @@ LLM_DEFAULT_TEMPERATURE=0.1
 # =========================================================
 BGE_M3=BAAI/bge-m3
 BGE_M3_PATH=/absolute/path/to/bge-m3
-BGE_DEVICE=cuda:0
-BGE_FP16=true
+BGE_DEVICE=cpu
+BGE_FP16=false
 
 # =========================================================
 # Reranker
@@ -330,8 +354,8 @@ BGE_FP16=true
 # =========================================================
 RERANKER_PROVIDER=bge
 RERANKER_MODEL=BAAI/bge-reranker-v2-m3
-RERANKER_DEVICE=cuda:0
-RERANKER_USE_FP16=true
+RERANKER_DEVICE=cpu
+RERANKER_USE_FP16=false
 RERANKER_BATCH_SIZE=8
 RERANKER_MAX_LENGTH=512
 RERANKER_NORMALIZE_SCORE=false
@@ -360,6 +384,7 @@ MONGO_DB_NAME=equipment_rag
 # MINIO_ENDPOINT通常填写host:port，不包含http://
 # =========================================================
 MINIO_ENDPOINT=127.0.0.1:9000
+MINIO_PUBLIC_ENDPOINT=localhost:9000
 MINIO_ACCESS_KEY=minioadmin
 MINIO_SECRET_KEY=minioadmin
 MINIO_BUCKET_NAME=equipment-rag
@@ -801,7 +826,7 @@ MONGO_DB_NAME=equipment_rag
 - [ ] 建立 Langfuse Dataset / RAGAS 自动化评测；
 - [ ] 增加设备告警分析 Agent；
 - [ ] 增加 OEE 分析 Agent 与 ECharts 展示；
-- [ ] 增加 Docker 化的一键启动方案；
+- [x] 增加 Docker Compose 一键启动方案；
 - [ ] 完善单元测试、集成测试和 CI。
 
 ---
@@ -823,18 +848,17 @@ MONGO_DB_NAME=equipment_rag
 
 ```text
 main        稳定版本
-beta        当前开发与功能验证版本
 feature/*   独立功能分支
 fix/*       问题修复分支
 ```
 
-推荐通过 Pull Request 将 `beta` 合并到 `main`，合并前至少执行：
+推荐所有升级通过 Pull Request 合并到 `main`，合并前至少执行：
 
 ```bash
-uv sync
-uv run python test/07-test_reranker_provider.py
-uv run python test/test_bge_m3.py
-uv run python -m py_compile app/clients/mineru_client.py
+uv sync --frozen
+docker compose config --quiet
+uv pip check
+uv run python -m compileall -q app
 ```
 
 ---
