@@ -1,25 +1,27 @@
-# 导入核心依赖：数据类、环境变量读取、路径处理
-from dataclasses import dataclass
 import os
+from dataclasses import dataclass
+
 from dotenv import load_dotenv
 
-# 提前加载.env配置文件（确保os.getenv能获取到MinIO相关配置）
+
+# MinIO 配置既可能来自本地 .env，也可能由 Compose/集群环境直接注入。
 load_dotenv()
 
 
-# 定义MinIO对象存储服务配置（与LLMConfig风格一致，字段对应.env配置项）
 @dataclass
 class MinIOConfig:
-    endpoint: str    # MinIO服务地址（含http/https和端口）
-    public_endpoint: str # 返回给浏览器的外部访问地址
-    access_key: str  # MinIO访问密钥（对应MINIO_ACCESS_KEY）
-    secret_key: str  # MinIO秘钥（对应MINIO_SECRET_KEY）
-    bucket_name: str # MinIO默认存储桶名（知识库文件专用）
-    minio_img_dir: str #Minio存储图片的文件夹
-    minio_secure: bool # 是否使用ssl加密 http 还是 https
+    """MinIO 内部连接和浏览器外部访问配置。"""
+
+    endpoint: str  # SDK 连接地址，格式为 host:port，不包含 http:// 或 https://。
+    public_endpoint: str  # 生成给浏览器的地址，不能使用仅容器可解析的服务名 minio。
+    access_key: str  # 部署者自定义的 MinIO 用户名，不是第三方平台 Token。
+    secret_key: str  # 与 Access Key 配套的密码，生产环境必须使用长随机值。
+    bucket_name: str  # 保存知识库文件和图片的桶；应用会按需创建。
+    minio_img_dir: str  # 桶内图片对象前缀，不是宿主机目录。
+    minio_secure: bool  # true 使用 HTTPS，必须与服务实际证书和端口一致。
 
 
-# 实例化MinIO配置对象，自动从.env读取配置并绑定
+# 内部地址用于后端上传，公开地址用于把可访问图片 URL 返回给浏览器。
 minio_config = MinIOConfig(
     endpoint=os.getenv("MINIO_ENDPOINT") or "127.0.0.1:9000",
     public_endpoint=os.getenv("MINIO_PUBLIC_ENDPOINT") or os.getenv("MINIO_ENDPOINT") or "127.0.0.1:9000",
@@ -27,5 +29,5 @@ minio_config = MinIOConfig(
     secret_key=os.getenv("MINIO_SECRET_KEY") or "minioadmin",
     bucket_name=os.getenv("MINIO_BUCKET_NAME") or "equipment-rag",
     minio_img_dir=os.getenv("MINIO_IMG_DIR") or "images",
-    minio_secure=(os.getenv("MINIO_SECURE") or "false").lower() == "true"
+    minio_secure=(os.getenv("MINIO_SECURE") or "false").lower() == "true",
 )

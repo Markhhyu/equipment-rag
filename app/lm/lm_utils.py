@@ -41,7 +41,7 @@ def get_llm_client(model: Optional[str] = None, json_mode: bool = False) -> Chat
     if not lm_config.api_key:
         raise ValueError("[LLM客户端] 配置缺失：请在.env中配置OPENAI_API_KEY（大模型API密钥）")
     if not lm_config.base_url:
-        raise ValueError("[LLM客户端] 配置缺失：请在.env中配置OPENAI_API_BASE（API接口基础地址）")
+        raise ValueError("[LLM客户端] 配置缺失：请在.env中配置OPENAI_BASE_URL（API接口基础地址）")
     logger.info(f"[LLM客户端] 开始初始化新实例：模型={target_model}，JSON模式={json_mode}")
 
     # 4. 配置参数组装：区分「国产模型私有参数」和「OpenAI通用参数」

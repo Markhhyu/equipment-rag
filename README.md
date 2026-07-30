@@ -356,117 +356,34 @@ POST /runs/{run_id}/retry
 
 ### 环境变量
 
-完整模板见 `.env.example`。以下是主要配置：
+`.env.example` 现在是可直接阅读的逐项配置手册，每个变量都说明了用途、获取方式、填写格式、Docker/宿主机差异和常见错误。完整操作说明见 [`docs/configuration.md`](docs/configuration.md)。
 
-```env
-# =========================================================
-# LLM
-# =========================================================
-OPENAI_BASE_URL=https://your-openai-compatible-endpoint/v1
-OPENAI_API_KEY=replace-with-your-api-key
-LLM_DEFAULT_MODEL=your-chat-model
-VL_MODEL=your-vision-model
-LLM_DEFAULT_TEMPERATURE=0.1
+首次启动只需要执行：
 
-# =========================================================
-# BGE-M3 Embedding
-# =========================================================
-BGE_M3=BAAI/bge-m3
-BGE_M3_PATH=/absolute/path/to/bge-m3
-BGE_DEVICE=cpu
-BGE_FP16=false
-
-# =========================================================
-# Reranker
-# provider支持：bge、qwen
-# =========================================================
-RERANKER_PROVIDER=bge
-RERANKER_MODEL=BAAI/bge-reranker-v2-m3
-RERANKER_DEVICE=cpu
-RERANKER_USE_FP16=false
-RERANKER_BATCH_SIZE=8
-RERANKER_MAX_LENGTH=512
-RERANKER_NORMALIZE_SCORE=false
-
-# 旧配置名仍保留兼容，可不配置
-BGE_RERANKER_LARGE=BAAI/bge-reranker-v2-m3
-BGE_RERANKER_DEVICE=cuda:0
-BGE_RERANKER_FP16=true
-
-# =========================================================
-# Milvus
-# =========================================================
-MILVUS_URL=http://127.0.0.1:19530
-CHUNKS_COLLECTION=equipment_chunks
-ENTITY_NAME_COLLECTION=equipment_entities
-ITEM_NAME_COLLECTION=equipment_item_names
-
-# =========================================================
-# MongoDB
-# =========================================================
-MONGO_URL=mongodb://127.0.0.1:27017
-MONGO_DB_NAME=equipment_rag
-
-# =========================================================
-# MinIO
-# MINIO_ENDPOINT通常填写host:port，不包含http://
-# =========================================================
-MINIO_ENDPOINT=127.0.0.1:9000
-MINIO_PUBLIC_ENDPOINT=localhost:9000
-MINIO_ACCESS_KEY=minioadmin
-MINIO_SECRET_KEY=minioadmin
-MINIO_BUCKET_NAME=equipment-rag
-MINIO_IMG_DIR=images
-MINIO_PDF_DIR=pdf_files
-MINIO_SECURE=False
-
-# =========================================================
-# MinerU API
-# =========================================================
-MINERU_API_BASE_URL=http://127.0.0.1:8002
-MINERU_API_TOKEN=
-MINERU_BACKEND=hybrid-engine
-MINERU_EFFORT=high
-MINERU_PARSE_METHOD=auto
-MINERU_LANGUAGE=ch_server
-MINERU_FORMULA_ENABLE=true
-MINERU_TABLE_ENABLE=true
-MINERU_IMAGE_ANALYSIS=true
-MINERU_RETURN_MIDDLE_JSON=true
-MINERU_RETURN_CONTENT_LIST=true
-MINERU_POLL_INTERVAL_SECONDS=3
-MINERU_TASK_TIMEOUT_SECONDS=3600
-MINERU_REQUEST_TIMEOUT_SECONDS=60
-MINERU_DOWNLOAD_TIMEOUT_SECONDS=600
-MINERU_VERIFY_SSL=true
-
-# 没有可用CUDA时建议改为：
-# MINERU_BACKEND=pipeline
-# MINERU_IMAGE_ANALYSIS=false
-
-# =========================================================
-# MCP WebSearch
-# 当前MCP鉴权复用OPENAI_API_KEY
-# =========================================================
-MCP_DASHSCOPE_BASE_URL=https://your-mcp-sse-endpoint
-
-# =========================================================
-# Langfuse
-# =========================================================
-LANGFUSE_TRACING_ENABLED=true
-LANGFUSE_HOST=http://127.0.0.1:3000
-LANGFUSE_PUBLIC_KEY=replace-with-public-key
-LANGFUSE_SECRET_KEY=replace-with-secret-key
-
-# =========================================================
-# Neo4j（当前仅预留）
-# =========================================================
-NEO4J_URI=bolt://127.0.0.1:7687
-NEO4J_USERNAME=neo4j
-NEO4J_PASSWORD=replace-with-password
+```powershell
+Copy-Item .env.example .env
+notepad .env
+docker compose config --quiet
+docker compose up --build
 ```
 
-> 不要将真实 API Key、密码、`.env` 或模型访问凭证提交到 Git。
+至少确认以下四项：
+
+| 配置 | 从哪里获取 | 填写内容 |
+|---|---|---|
+| `OPENAI_BASE_URL` | 模型服务商的 OpenAI 兼容接口文档或创建密钥后的 API Host | 基础地址，通常以 `/v1` 结尾 |
+| `OPENAI_API_KEY` | OpenAI、阿里云百炼或其他模型服务商控制台 | 原始密钥，不加 `Bearer ` |
+| `LLM_DEFAULT_MODEL` | 服务商模型列表 | 支持对话的模型 ID |
+| `VL_MODEL` | 服务商模型列表 | 支持图片输入的模型 ID |
+
+连接地址的判断规则：
+
+| 应用运行位置 | MongoDB | MinIO | Milvus | MinerU |
+|---|---|---|---|---|
+| Docker Compose 容器内 | `mongo:27017` | `minio:9000` | `milvus:19530` | `host.docker.internal:8002` |
+| 直接在宿主机运行 Python | `127.0.0.1:27017` | `127.0.0.1:9000` | `127.0.0.1:19530` | `127.0.0.1:8002` |
+
+> 不要提交真实 API Key、密码、`.env` 或模型访问凭证。应用 API Key、MongoDB 密码和 MinIO 密码由部署者自己生成；OpenAI、百炼、Langfuse 和 Neo4j 凭据从各自控制台获取。
 
 ---
 
@@ -533,20 +450,26 @@ python -c "import torch; print('torch=', torch.__version__); print('torch_cuda='
 
 ## 启动 Langfuse
 
-```bash
+Langfuse 的数据库、缓存和对象存储密码不能使用仓库默认占位值。先复制专用模板，并按注释生成不同的随机密钥：
+
+```powershell
 cd deploy/langfuse
+Copy-Item .env.example .env
+notepad .env
+docker compose --env-file .env config --quiet
 docker compose up -d
 ```
 
-启动后根据实际 Compose 配置访问 Langfuse，并创建项目获取：
+启动后访问 `http://localhost:3000`，创建组织和项目，然后进入 Project Settings → API Keys 获取：
 
 ```env
-LANGFUSE_PUBLIC_KEY=...
-LANGFUSE_SECRET_KEY=...
-LANGFUSE_HOST=...
+LANGFUSE_TRACING_ENABLED=true
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_HOST=http://host.docker.internal:3000
 ```
 
-关闭：
+以上四项填写在主项目根目录的 `.env`，不是 `deploy/langfuse/.env`。关闭 Langfuse：
 
 ```bash
 docker compose down
