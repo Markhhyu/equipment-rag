@@ -35,7 +35,7 @@ def _as_entity_list(state_list) -> List[Dict[str, Any]]:
                  # 尝试直接作为 dict 访问 (某些版本 sdk)
                  try:
                      final_ent = dict(entity_content)
-                 except:
+                 except (TypeError, ValueError):
                      pass
             
             # 2. 补充最外层的 id 和 distance

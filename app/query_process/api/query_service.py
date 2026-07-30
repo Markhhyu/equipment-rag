@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from app.observability.rag_observability import score_query_result
 
 from app.core.logger import logger
-from app.observability.langfuse_monitor import flush_langfuse, trace_query
+from app.observability.langfuse_monitor import flush_langfuse
 
 from app.utils.task_utils import *
 from app.utils.sse_utils import create_sse_queue, SSEEvent, sse_generator

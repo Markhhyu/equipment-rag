@@ -215,7 +215,7 @@ def step_5_align_item_names(query_results: List[Dict]) -> Dict:
             logger.info(f"Step 5: 规则C命中 (Mid Confidence) -> 添加候选: {current_options}")
             continue
         
-        logger.info(f"Step 5: 规则D命中 (Low Confidence) -> 无匹配")
+        logger.info("Step 5: 规则D命中 (Low Confidence) -> 无匹配")
 
     result = {
         "confirmed_item_names": list(set(confirmed_item_names)),

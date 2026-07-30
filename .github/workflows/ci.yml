@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Python 3.14 quality gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.12.0"
+          python-version: "3.14"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Verify dependency lock
+        run: uv lock --check
+
+      - name: Install locked dependencies
+        run: uv sync --locked --group dev --no-install-project
+
+      - name: Check dependency compatibility
+        run: uv pip check
+
+      - name: Lint
+        run: uv run --frozen ruff check app tests scripts
+
+      - name: Check formatting
+        run: uv run --frozen ruff format --check tests scripts
+
+      - name: Run tests
+        run: uv run --frozen pytest
+
+      - name: Compile Python modules
+        run: uv run --frozen python -m compileall -q app
+
+      - name: Validate Compose configuration
+        run: |
+          docker compose config --quiet
+          docker compose --env-file .env.example config --quiet
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high

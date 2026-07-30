@@ -52,7 +52,7 @@ def get_llm_client(model: Optional[str] = None, json_mode: bool = False) -> Chat
     if json_mode:
         # 开启JSON标准输出模式，强制模型返回可解析的json_object
         model_kwargs["response_format"] = {"type": "json_object"}
-        logger.debug(f"[LLM客户端] 已开启JSON输出模式，模型将返回标准JSON结构")
+        logger.debug("[LLM客户端] 已开启JSON输出模式，模型将返回标准JSON结构")
 
     # 5. 客户端初始化：捕获LangChain封装层异常，抛出更友好的提示
     try:

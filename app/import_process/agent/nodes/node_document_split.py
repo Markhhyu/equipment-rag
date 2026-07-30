@@ -276,7 +276,7 @@ def step_4_refine_chunks(sections: List[Dict[str, Any]], max_len: int) -> List[D
             
         if not sec.get("parent_title"):
             sec["parent_title"] = sec.get("title") or ""
-    logger.debug(f"步骤4-3：父标题兜底完成，所有Chunk均包含parent_title字段")
+    logger.debug("步骤4-3：父标题兜底完成，所有Chunk均包含parent_title字段")
 
     return final_sections
 

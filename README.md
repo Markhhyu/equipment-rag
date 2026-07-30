@@ -326,6 +326,13 @@ uv run uvicorn app.import_process.api.file_import_service:app --host 127.0.0.1 -
 uv run uvicorn app.query_process.api.query_service:app --host 127.0.0.1 --port 8001
 ```
 
+开发者安装质量工具并执行与 CI 相同的本地检查：
+
+```bash
+uv sync --frozen --group dev
+uv run python scripts/check.py
+```
+
 ### 环境变量
 
 完整模板见 `.env.example`。以下是主要配置：
