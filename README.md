@@ -333,6 +333,14 @@ uv sync --frozen --group dev
 uv run python scripts/check.py
 ```
 
+离线评测与真实 API 回归使用同一个评测入口，详见 `evals/README.md`：
+
+```bash
+uv run python -m app.evaluation.cli replay \
+  --predictions evals/fixtures/smoke_predictions.jsonl \
+  --fail-on-threshold
+```
+
 ### 环境变量
 
 完整模板见 `.env.example`。以下是主要配置：

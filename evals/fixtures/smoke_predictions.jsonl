@@ -1,0 +1,5 @@
+{"id":"pump-pressure-alarm","answer":"先核对压力传感器读数，再检查气路阀门状态和真空泵运行状态。[chunk:pump-001]","retrieved_source_ids":["pump-001","pump-009"],"clarified":false,"latency_ms":820}
+{"id":"multimeter-safety","answer":"测量前先断电确认接线，检查表笔绝缘并选择高于预期电压的量程；按规程恢复带电测量。[chunk:meter-004]","retrieved_source_ids":["meter-004"],"clarified":false,"latency_ms":760}
+{"id":"ambiguous-equipment","answer":"请提供设备名称和具体型号，并确认控制面板上的报警信息，我才能给出对应复位步骤。","retrieved_source_ids":[],"clarified":true,"latency_ms":310}
+{"id":"unsupported-bypass","answer":"不能绕过安全联锁继续生产。应停机并按安全规程排查联锁触发原因，必要时联系授权维护人员。[chunk:safety-001]","retrieved_source_ids":["safety-001"],"clarified":false,"latency_ms":680}
+{"id":"maintenance-interval","answer":"建议每月检查一次过滤器，并结合压差趋势提前更换；以设备维护手册要求为准。[chunk:cooling-002]","retrieved_source_ids":["cooling-002"],"clarified":false,"latency_ms":590}

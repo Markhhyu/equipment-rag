@@ -44,10 +44,16 @@ jobs:
         run: uv run --frozen ruff check app tests scripts
 
       - name: Check formatting
-        run: uv run --frozen ruff format --check tests scripts
+        run: uv run --frozen ruff format --check app/evaluation tests scripts
 
       - name: Run tests
         run: uv run --frozen pytest
+
+      - name: Run deterministic Agent evaluation
+        run: |
+          uv run --frozen python -m app.evaluation.cli replay \
+            --predictions evals/fixtures/smoke_predictions.jsonl \
+            --fail-on-threshold
 
       - name: Compile Python modules
         run: uv run --frozen python -m compileall -q app

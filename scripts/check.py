@@ -20,8 +20,20 @@ def main() -> int:
     run("uv", "lock", "--check")
     run("uv", "pip", "check")
     run("uv", "run", "--frozen", "ruff", "check", "app", "tests", "scripts")
-    run("uv", "run", "--frozen", "ruff", "format", "--check", "tests", "scripts")
+    run("uv", "run", "--frozen", "ruff", "format", "--check", "app/evaluation", "tests", "scripts")
     run("uv", "run", "--frozen", "pytest")
+    run(
+        "uv",
+        "run",
+        "--frozen",
+        "python",
+        "-m",
+        "app.evaluation.cli",
+        "replay",
+        "--predictions",
+        "evals/fixtures/smoke_predictions.jsonl",
+        "--fail-on-threshold",
+    )
     run("uv", "run", "--frozen", "python", "-m", "compileall", "-q", "app")
 
     if shutil.which("docker"):

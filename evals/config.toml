@@ -1,0 +1,10 @@
+[thresholds]
+case_pass_score = 0.85
+pass_rate = 0.80
+answer_present = 1.00
+keyword_coverage = 0.80
+forbidden_term_pass = 1.00
+clarification_pass = 1.00
+retrieval_recall = 0.80
+citation_pass = 0.80
+latency_pass = 0.80

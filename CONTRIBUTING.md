@@ -30,7 +30,7 @@ Ruff is the source of truth for linting and formatting:
 
 ```bash
 uv run ruff check app tests scripts
-uv run ruff format tests scripts
+uv run ruff format app/evaluation tests scripts
 ```
 
 The legacy `test/` directory contains manual integration scripts. New automated

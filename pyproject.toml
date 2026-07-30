@@ -46,7 +46,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-addopts = "-p no:cacheprovider --strict-config --strict-markers --cov=app --cov-report=term-missing:skip-covered --cov-fail-under=10"
+addopts = "-p no:cacheprovider --strict-config --strict-markers --cov=app --cov-report=term-missing:skip-covered --cov-fail-under=20"
 asyncio_mode = "auto"
 pythonpath = ["."]
 testpaths = ["tests"]
