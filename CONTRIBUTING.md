@@ -14,6 +14,9 @@ uv run python scripts/check.py
 The second command runs the same lockfile, dependency, lint, format, test,
 compile, and Compose checks used by CI.
 
+Maintainers can also run the workflow on a branch with
+`gh workflow run .github/workflows/ci.yml --ref <branch>`.
+
 ## Pull requests
 
 - Branch from the latest target branch and keep each change focused.
