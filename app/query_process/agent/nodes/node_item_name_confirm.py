@@ -354,8 +354,13 @@ def node_item_name_confirm(state: QueryGraphState) -> QueryGraphState:
     final_state = step_7_write_history(state, session_id, history, rewritten_query, message_id)
 
     # 将 history 存入 state，供后续节点（如 node_answer_output）使用
-    final_state["history"] = history
-
+    final_state["history"] = [
+        {
+            "role": message.get("role", ""),
+            "text": message.get("text", ""),
+        }
+        for message in history
+    ]
     # 标记任务完成
     add_done_task(session_id, "node_item_name_confirm", is_stream)
     

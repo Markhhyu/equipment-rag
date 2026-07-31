@@ -26,9 +26,22 @@ def _create_mcp_server():
         "sse_read_timeout": 300,
     }
     if mcp_config.transport == "streamable_http":
-        return MCPServerStreamableHttp(name="search_mcp", params=params)
+        return MCPServerStreamableHttp(
+            name="search_mcp",
+            params=params,
+            client_session_timeout_seconds=60,
+            max_retry_attempts=2,
+            retry_backoff_seconds_base=1.0,
+        )
+
     if mcp_config.transport == "sse":
-        return MCPServerSse(name="search_mcp", params=params)
+        return MCPServerSse(
+            name="search_mcp",
+            params=params,
+            client_session_timeout_seconds=60,
+            max_retry_attempts=2,
+            retry_backoff_seconds_base=1.0,
+        )
     raise ValueError("MCP_DASHSCOPE_TRANSPORT 只支持 streamable_http 或 sse")
 
 
@@ -60,8 +73,10 @@ async def mcp_call(query):
         logger.info("[MCP] 工具调用完成，已获取返回结果")
         return result
 
-    except Exception as e:
-        logger.error(f"[MCP] 调用过程中发生异常: {e}", exc_info=True)
+    except Exception:
+
+        logger.exception("[MCP] 调用过程中发生异常")
+
         return None
 
     finally:

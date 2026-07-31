@@ -31,23 +31,21 @@ def create_query_trace_id() -> str:
     """
     为一次独立问答生成Langfuse Trace ID。
 
-    注意：
-    session_id表示整个多轮会话；
-    trace_id表示当前这一轮问答。
-
-    同一个session_id下面可以有多个trace_id。
-
-    :return:
-        Langfuse开启时返回32位十六进制Trace ID；
-        Langfuse关闭时返回空字符串。
+    当前项目要求问答流程必须接入Langfuse，因此监控未开启、
+    客户端未初始化或Trace ID生成异常时直接终止请求。
     """
+    if not LANGFUSE_ENABLED:
+        raise RuntimeError("Langfuse监控未开启，请配置LANGFUSE_TRACING_ENABLED=true")
 
-    # 监控关闭时不生成Trace ID。
-    if not LANGFUSE_ENABLED or langfuse is None:
-        return ""
+    if langfuse is None:
+        raise RuntimeError("Langfuse客户端未初始化，请检查HOST、PUBLIC_KEY和SECRET_KEY配置")
 
-    # Langfuse会生成符合OpenTelemetry规范的32位Trace ID。
-    return langfuse.create_trace_id()
+    trace_id = langfuse.create_trace_id()
+
+    if not re.fullmatch(r"[0-9a-fA-F]{32}", trace_id or ""):
+        raise RuntimeError(f"Langfuse生成的trace_id无效：{trace_id!r}")
+
+    return trace_id
 
 
 @contextmanager

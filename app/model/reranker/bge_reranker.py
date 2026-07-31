@@ -1,56 +1,66 @@
 from typing import Sequence
 
-from FlagEmbedding import FlagReranker
+import torch
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from app.conf.reranker_config import RerankerConfig
 from app.core.logger import logger
-from app.model.reranker.base import BaseReranker, SentencePair, convert_scores_to_list
+from app.model.reranker.base import BaseReranker, SentencePair
 
 
 class BgeReranker(BaseReranker):
-    """
-    BGE Reranker适配器。
-
-    默认使用BAAI/bge-reranker-v2-m3，继续作为当前生产基线。
-    """
+    """基于Transformers原生接口的BGE Reranker实现。"""
 
     def __init__(self, config: RerankerConfig):
         super().__init__("bge", config.model_name_or_path)
         self.config = config
-
-        # CPU通常不适合FP16，因此只有CUDA环境才真正启用。
-        effective_fp16 = config.use_fp16 and config.device.startswith("cuda")
+        self.device = torch.device(config.device)
+        self.use_fp16 = config.use_fp16 and config.device.startswith("cuda")
 
         logger.info(
             f"开始初始化BGE Reranker，model={config.model_name_or_path}，"
-            f"device={config.device}，fp16={effective_fp16}"
+            f"device={config.device}，fp16={self.use_fp16}"
         )
 
-        # devices是新版FlagEmbedding使用的设备参数。
-        self.model = FlagReranker(
-            config.model_name_or_path,
-            devices=config.device,
-            use_fp16=effective_fp16
-        )
+        self.tokenizer = AutoTokenizer.from_pretrained(config.model_name_or_path)
+        self.model = AutoModelForSequenceClassification.from_pretrained(config.model_name_or_path)
+
+        if self.use_fp16:
+            self.model.half()
+
+        self.model.to(self.device)
+        self.model.eval()
 
         logger.info("BGE Reranker初始化完成")
 
     def compute_score(self, sentence_pairs: Sequence[SentencePair]) -> list[float]:
-        """
-        使用BGE计算候选文档相关性分数。
-
-        normalize=False时返回原始Logit分数；
-        normalize=True时通过Sigmoid映射到0～1。
-        """
-
         if not sentence_pairs:
             return []
 
-        scores = self.model.compute_score(
-            sentence_pairs,
-            batch_size=self.config.batch_size,
-            max_length=self.config.max_length,
-            normalize=self.config.normalize_score
-        )
+        pairs = [[str(pair[0]), str(pair[1])] for pair in sentence_pairs]
+        scores: list[float] = []
 
-        return convert_scores_to_list(scores)
+        for start in range(0, len(pairs), self.config.batch_size):
+            batch = pairs[start:start + self.config.batch_size]
+
+            inputs = self.tokenizer(
+                batch,
+                padding=True,
+                truncation=True,
+                max_length=self.config.max_length,
+                return_tensors="pt",
+            )
+            inputs = {name: value.to(self.device) for name, value in inputs.items()}
+
+            with torch.inference_mode():
+                logits = self.model(
+                    **inputs,
+                    return_dict=True,
+                ).logits.view(-1).float()
+
+                if self.config.normalize_score:
+                    logits = torch.sigmoid(logits)
+
+            scores.extend(logits.cpu().tolist())
+
+        return scores

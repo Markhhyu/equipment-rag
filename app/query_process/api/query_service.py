@@ -326,7 +326,12 @@ async def query(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     # 每一次提问都生成独立Trace ID。
     # session_id代表整个对话，trace_id代表当前这一轮问答。
-    trace_id = create_query_trace_id()
+    try:
+        trace_id = create_query_trace_id()
+    except RuntimeError as exc:
+        logger.exception("创建Langfuse Trace ID失败")
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     runtime_config = load_runtime_config()
     run_store = get_run_store()
     run_store.create(

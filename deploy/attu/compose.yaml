@@ -1,0 +1,25 @@
+name: equipment-rag-attu
+
+services:
+  attu:
+    image: zilliz/attu:v2.6.5
+    container_name: equipment-rag-attu
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${ATTU_PORT:-3001}:3000"
+    environment:
+      MILVUS_ADDRESS: milvus:19530
+      MILVUS_NAME: Equipment RAG
+      MILVUS_DATABASE: default
+    volumes:
+      - attu-data:/data
+    networks:
+      - equipment-rag
+
+networks:
+  equipment-rag:
+    external: true
+    name: equipment-rag_default
+
+volumes:
+  attu-data:

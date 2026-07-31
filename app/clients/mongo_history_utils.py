@@ -231,6 +231,13 @@ def update_message_item_names(ids: List[str], item_names: List[str]) -> int:
         # 异常时返回0，标识更新失败
         return 0
 
+def _to_serializable(value):
+    """将MongoDB/BSON类型转换为可被LangGraph Checkpoint序列化的基础类型。"""
+    if isinstance(value, ObjectId): return str(value)
+    if isinstance(value, datetime): return value.isoformat()
+    if isinstance(value, dict): return {key: _to_serializable(item) for key, item in value.items()}
+    if isinstance(value, list): return [_to_serializable(item) for item in value]
+    return value
 
 def get_recent_messages(session_id: str, limit: int = 10) -> List[Dict[str, Any]]:
     """
@@ -251,10 +258,7 @@ def get_recent_messages(session_id: str, limit: int = 10) -> List[Dict[str, Any]
         # sort("ts", ASCENDING)：按ts字段升序（从旧到新），适配LLM上下文顺序
         # limit(limit)：限制返回的最大条数
         cursor = mongo_tool.chat_message.find(query).sort("ts", ASCENDING).limit(limit)
-        # 将游标转为列表，触发实际数据库查询，获取所有符合条件的文档
-        messages = list(cursor)
-        # 返回查询结果列表
-        return messages
+        return [_to_serializable(message) for message in cursor]
     except Exception as e:
         # 捕获查询异常，记录错误日志
         logging.error(f"Error getting recent messages: {e}")
