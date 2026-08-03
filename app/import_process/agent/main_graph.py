@@ -15,6 +15,7 @@ from app.import_process.agent.nodes.node_item_name_recognition import node_item_
 from app.import_process.agent.nodes.node_bge_embedding import node_bge_embedding  # BGE向量化：将文本分块转换为向量表示（适配Milvus向量库）
 from app.import_process.agent.nodes.node_import_milvus import node_import_milvus  # 导入Milvus：将向量数据写入Milvus向量数据库
 from app.runtime.checkpointing import get_checkpointer
+from app.observability.rag_observability import observed_graph_node
 
 
 # 初始化环境变量：必须在配置读取前执行，确保后续节点能获取到环境变量中的配置信息
@@ -30,13 +31,18 @@ workflow = StateGraph(ImportGraphState)
 # 语法：add_node("节点唯一标识", 节点函数)
 # 要求：节点函数必须接收「状态对象」作为入参，返回字典（用于更新状态）
 # 所有节点按「知识库导入流程」先后顺序注册，节点标识与函数名保持一致，便于维护
-workflow.add_node("node_entry", node_entry)  # 流程入口：参数初始化、输入校验
-workflow.add_node("node_pdf_to_md", node_pdf_to_md)  # PDF转MD：非MD格式文件的前置处理
-workflow.add_node("node_md_img", node_md_img)  # MD图片处理：保证文档中图片的可访问性
-workflow.add_node("node_document_split", node_document_split)  # 文档分块：解决大文本无法向量化/推理的问题
-workflow.add_node("node_item_name_recognition", node_item_name_recognition)  # 项目名识别：业务定制化步骤，提取核心业务标识
-workflow.add_node("node_bge_embedding", node_bge_embedding)  # BGE向量化：文本→向量，为Milvus存储做准备
-workflow.add_node("node_import_milvus", node_import_milvus)  # 向量入库：将向量数据持久化到Milvus
+# observed_graph_node不会改变业务节点的输入输出，只是在外层统一增加：
+# 1. Langfuse Span；2. Prometheus耗时与成功率；3. 不含正文和向量的质量摘要。
+workflow.add_node("node_entry", observed_graph_node("import", "node_entry", node_entry))
+workflow.add_node("node_pdf_to_md", observed_graph_node("import", "node_pdf_to_md", node_pdf_to_md))
+workflow.add_node("node_md_img", observed_graph_node("import", "node_md_img", node_md_img))
+workflow.add_node("node_document_split", observed_graph_node("import", "node_document_split", node_document_split))
+workflow.add_node(
+    "node_item_name_recognition",
+    observed_graph_node("import", "node_item_name_recognition", node_item_name_recognition),
+)
+workflow.add_node("node_bge_embedding", observed_graph_node("import", "node_bge_embedding", node_bge_embedding))
+workflow.add_node("node_import_milvus", observed_graph_node("import", "node_import_milvus", node_import_milvus))
 
 # ===================== 3. 设置工作流入口节点 =====================
 # 语法：set_entry_point("节点标识") → 推荐写法，直接指定流程起始节点

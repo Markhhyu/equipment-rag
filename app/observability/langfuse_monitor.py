@@ -7,6 +7,7 @@ from typing import Any, Iterator, Optional, Tuple
 from dotenv import find_dotenv, load_dotenv
 from langfuse import get_client, propagate_attributes
 from langfuse.langchain import CallbackHandler
+from app.conf.rag_tuning_config import rag_tuning_config
 
 
 # 加载项目根目录中的.env配置。
@@ -18,7 +19,8 @@ load_dotenv(find_dotenv())
 # 在.env中配置LANGFUSE_TRACING_ENABLED=false即可临时关闭。
 LANGFUSE_ENABLED = os.getenv(
     "LANGFUSE_TRACING_ENABLED",
-    "true"
+    # 默认关闭，和.env.example保持一致。未配置密钥时业务仍可正常运行。
+    "false"
 ).lower() == "true"
 
 
@@ -31,14 +33,13 @@ def create_query_trace_id() -> str:
     """
     为一次独立问答生成Langfuse Trace ID。
 
-    当前项目要求问答流程必须接入Langfuse，因此监控未开启、
-    客户端未初始化或Trace ID生成异常时直接终止请求。
-    """
-    if not LANGFUSE_ENABLED:
-        raise RuntimeError("Langfuse监控未开启，请配置LANGFUSE_TRACING_ENABLED=true")
+    Langfuse开启时使用其原生Trace ID；关闭时使用本地UUID。
 
-    if langfuse is None:
-        raise RuntimeError("Langfuse客户端未初始化，请检查HOST、PUBLIC_KEY和SECRET_KEY配置")
+    这样做很重要：可观测平台应该增强业务，而不能因为平台暂时不可用就让问答接口停机。
+    本地UUID仍然可以关联运行状态、MongoDB历史和用户反馈，只是不会出现在Langfuse页面。
+    """
+    if not LANGFUSE_ENABLED or langfuse is None:
+        return uuid.uuid4().hex
 
     trace_id = langfuse.create_trace_id()
 
@@ -46,6 +47,43 @@ def create_query_trace_id() -> str:
         raise RuntimeError(f"Langfuse生成的trace_id无效：{trace_id!r}")
 
     return trace_id
+
+
+@contextmanager
+def trace_import(
+        task_id: str,
+        tenant_id: str,
+        file_name: str
+) -> Iterator[Tuple[Optional[Any], Optional[CallbackHandler]]]:
+    """为一次文件导入建立Langfuse根Trace。
+
+    根Trace下面会自动挂载PDF解析、图片处理、切片、设备识别、Embedding和Milvus入库节点。
+    默认只记录文件名和统计结果，不把文档全文或向量上传到Langfuse。
+    """
+
+    if not LANGFUSE_ENABLED or langfuse is None:
+        yield None, None
+        return
+
+    handler = CallbackHandler()
+    with langfuse.start_as_current_observation(
+            as_type="agent",
+            name="equipment-import-agent",
+            input={"task_id": task_id, "file_name": file_name}
+    ) as observation:
+        with propagate_attributes(
+                trace_name="设备文档导入",
+                session_id=task_id,
+                tags=["equipment-rag", "langgraph", "import"],
+                metadata={
+                    "service": "import-service",
+                    "tenant_id": tenant_id,
+                    "monitor_version": "2.0",
+                    # 保存本次运行的完整调优参数，之后才能在Langfuse中公平比较实验结果。
+                    "rag_tuning": rag_tuning_config.to_dict(),
+                }
+        ):
+            yield observation, handler
 
 
 @contextmanager
@@ -114,7 +152,8 @@ def trace_query(
                 metadata={
                     "service": "query-service",
                     "is_stream": is_stream,
-                    "monitor_version": "1.1"
+                    "monitor_version": "2.0",
+                    "rag_tuning": rag_tuning_config.to_dict(),
                 }
         ):
             yield observation, handler
@@ -141,9 +180,10 @@ def submit_trace_feedback(
     :param comment: 用户补充说明，最多保留500个字符。
     """
 
-    # 监控关闭时不能提交反馈。
+    # Langfuse关闭时跳过远端Score；调用方仍会把反馈写入MongoDB和Prometheus。
+    # 可观测平台暂时不可用不应该导致用户的点赞/点踩接口返回503。
     if not LANGFUSE_ENABLED or langfuse is None:
-        raise RuntimeError("Langfuse监控未开启，无法提交反馈")
+        return
 
     # Trace ID必须是32位十六进制字符串。
     # 这可以阻止前端提交明显无效的数据。

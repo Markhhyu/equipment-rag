@@ -16,6 +16,8 @@ DEFAULT_THRESHOLDS = {
     "forbidden_term_pass": 1.0,
     "clarification_pass": 1.0,
     "retrieval_recall": 0.8,
+    "retrieval_precision": 0.5,
+    "retrieval_mrr": 0.8,
     "citation_pass": 0.8,
     "latency_pass": 0.8,
 }
@@ -93,6 +95,8 @@ def evaluate(
                 "forbidden_term_pass",
                 "clarification_pass",
                 "retrieval_recall",
+                "retrieval_precision",
+                "retrieval_mrr",
                 "citation_pass",
                 "latency_pass",
             )
@@ -127,6 +131,8 @@ def evaluate(
         "forbidden_term_pass",
         "clarification_pass",
         "retrieval_recall",
+        "retrieval_precision",
+        "retrieval_mrr",
         "citation_pass",
         "latency_pass",
     ):

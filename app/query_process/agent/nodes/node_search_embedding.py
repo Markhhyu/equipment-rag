@@ -19,6 +19,7 @@ from app.utils.task_utils import (
     add_running_task
 )
 from app.security.tenancy import escape_milvus_literal, tenant_filter
+from app.conf.rag_tuning_config import rag_tuning_config
 
 
 # 加载项目.env配置。
@@ -178,8 +179,8 @@ def node_search_embedding(state):
         dense_vector=dense_vec,
         sparse_vector=sparse_vec,
         expr=expr,
-        # 每一路向量检索先召回10条候选。
-        limit=10
+        # 候选数量越大，召回率通常越高，但Milvus和Reranker耗时也会增加。
+        limit=rag_tuning_config.retrieval_candidate_limit
     )
 
     # ==================== 第三阶段：Milvus混合检索 ====================
@@ -194,10 +195,10 @@ def node_search_embedding(state):
             metadata={
                 "collection": collection_name,
                 "filter": expr,
-                "dense_weight": 0.8,
-                "sparse_weight": 0.2,
-                "candidate_limit": 10,
-                "result_limit": 5,
+                "dense_weight": rag_tuning_config.dense_weight,
+                "sparse_weight": rag_tuning_config.sparse_weight,
+                "candidate_limit": rag_tuning_config.retrieval_candidate_limit,
+                "result_limit": rag_tuning_config.retrieval_result_limit,
                 "normalization": True
             }
     ) as retrieval_observation:
@@ -214,14 +215,14 @@ def node_search_embedding(state):
             collection_name=collection_name,
             reqs=reqs,
 
-            # 稠密向量权重80%，稀疏向量权重20%。
-            ranker_weights=(0.8, 0.2),
+            # 权重来自.env；默认Dense=0.8、Sparse=0.2，修改后会记录进Langfuse Trace。
+            ranker_weights=(rag_tuning_config.dense_weight, rag_tuning_config.sparse_weight),
 
             # 先对两路分数归一化，再进行加权融合。
             norm_score=True,
 
-            # 最终返回Top5。
-            limit=5,
+            # 最终返回数量由RAG_RETRIEVAL_RESULT_LIMIT控制。
+            limit=rag_tuning_config.retrieval_result_limit,
 
             # content需要交给后续RRF和Reranker使用。
             output_fields=[

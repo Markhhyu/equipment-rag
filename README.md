@@ -63,6 +63,7 @@ Equipment RAG Agent 面向制造业设备知识管理与现场运维场景，目
 | 用户反馈 | 点赞/点踩同时写入 Langfuse 和 MongoDB | ✅ 已实现 |
 | 权限与鉴权 | API Key、角色和租户级运行/会话/向量/对象隔离 | ✅ 已实现 |
 | 自动化评测 | 确定性离线数据集、阈值门禁和报告 | ✅ 已实现 |
+| 运行指标 | Prometheus指标与Grafana预置Dashboard | ✅ 已实现 |
 
 ---
 
@@ -221,7 +222,7 @@ node_item_name_confirm
 ## 项目结构
 
 ```text
-equipment-rag/
+equipment-rag-agent/
 ├── app/
 │   ├── clients/                         # Milvus、MinIO、MongoDB、Neo4j、MinerU 客户端
 │   ├── conf/                            # LLM、Embedding、Milvus、MinerU、Reranker 等配置
@@ -282,15 +283,58 @@ equipment-rag/
 
 ## 快速开始
 
-### Docker 一条命令启动（推荐）
+### Windows 全栈一键启动（推荐）
+
+克隆仓库后，首次运行只需要执行一个脚本：
+
+```powershell
+git clone https://github.com/Markhhyu/equipment-rag-agent.git
+cd equipment-rag-agent
+.\start-all.ps1
+```
+
+脚本会自动完成以下工作：
+
+- 检查 Docker Desktop 和所有 Compose 配置；
+- 根目录缺少 `.env` 时，从带详细中文注释的 `.env.example` 创建；
+- 首次运行时，为本地 Langfuse 自动生成安全且互相匹配的数据库、缓存和对象存储密钥；
+- 按依赖顺序启动 MongoDB、MinIO、Milvus、API、Langfuse、Prometheus、Grafana 和 Attu；
+- 检测 MinerU；未安装时只跳过 PDF 解析，不影响 Markdown 导入和问答；
+- 等待健康检查通过，最后统一列出页面地址和排查命令。
+
+如果 PowerShell 执行策略阻止运行，可以双击 `start-all.cmd`，它会调用同一个 PowerShell 实现。常用选项：
+
+```powershell
+# 代码和依赖没有变化时跳过镜像构建，加快再次启动。
+.\start-all.ps1 -SkipBuild
+
+# 内存不足时只启动业务核心组件，不启动 Langfuse、仪表盘和 Attu。
+.\start-all.ps1 -CoreOnly
+
+# 本机未安装 MinerU，且当前只导入 Markdown。
+.\start-all.ps1 -NoMineru
+```
+
+一键暂停默认只停止进程和容器，不删除容器、命名卷或业务数据，因此下次恢复更快：
+
+```powershell
+.\stop-all.ps1
+
+# 如需同时删除容器和网络，可使用此选项；命名卷和业务数据仍会保留。
+.\stop-all.ps1 -RemoveContainers
+```
+
+> 自动生成的 `deploy/langfuse/.env` 和根目录 `.env` 都已被 Git 忽略。请备份前者的 `ENCRYPTION_KEY`，并在真正调用模型前编辑根目录 `.env` 中的模型 API 配置。
+
+### Docker Compose 启动核心服务
 
 ```bash
-git clone https://github.com/Markhhyu/equipment-rag.git
-cd equipment-rag
+git clone https://github.com/Markhhyu/equipment-rag-agent.git
+cd equipment-rag-agent
 docker compose up --build
 ```
 
-该命令会同时启动查询 API、导入 API、MongoDB、MinIO、etcd 和 Milvus，无需先创建 `.env`。首次启动需要下载 Python 依赖和 BGE 模型，请耐心等待。
+该命令会同时启动查询 API、导入 API、MongoDB、MinIO、etcd 和 Milvus，但不包含 MinerU、Langfuse、Prometheus/Grafana 和 Attu。首次启动需要下载 Python 依赖和 BGE 模型，请耐心等待。
 
 启动后可访问：
 
@@ -342,6 +386,8 @@ uv run python -m app.evaluation.cli replay \
   --predictions evals/fixtures/smoke_predictions.jsonl \
   --fail-on-threshold
 ```
+
+完整的Langfuse、Prometheus/Grafana、黄金数据集和调优说明见 [`docs/observability.md`](docs/observability.md)。
 
 ### 运行恢复
 
@@ -450,14 +496,16 @@ python -c "import torch; print('torch=', torch.__version__); print('torch_cuda='
 
 ## 启动 Langfuse
 
-Langfuse 的数据库、缓存和对象存储密码不能使用仓库默认占位值。先复制专用模板，并按注释生成不同的随机密钥：
+推荐直接运行根目录的 `.\start-all.ps1`：脚本会在首次启动时生成 `deploy/langfuse/.env`，并为数据库、缓存、加密和对象存储写入安全随机密钥。
+
+如果需要脱离一键脚本手工部署，Langfuse 的数据库、缓存和对象存储密码不能使用仓库默认占位值。请复制专用模板，并按注释生成不同的随机密钥：
 
 ```powershell
 cd deploy/langfuse
 Copy-Item .env.example .env
 notepad .env
 docker compose --env-file .env config --quiet
-docker compose up -d
+docker compose --env-file .env up -d
 ```
 
 启动后访问 `http://localhost:3000`，创建组织和项目，然后进入 Project Settings → API Keys 获取：

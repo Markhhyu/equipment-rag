@@ -40,6 +40,8 @@ def test_score_case_covers_grounding_safety_and_latency():
     assert metrics.keyword_coverage == 1.0
     assert metrics.forbidden_term_pass == 1.0
     assert metrics.retrieval_recall == 1.0
+    assert metrics.retrieval_precision == 0.5
+    assert metrics.retrieval_mrr == 1.0
     assert metrics.citation_pass == 1.0
     assert metrics.latency_pass == 1.0
 
@@ -48,6 +50,8 @@ def test_missing_optional_runtime_metadata_is_not_faked():
     metrics = score_case(make_case(), Prediction(case_id="case-1", answer="检查压力和阀门。[1]"))
 
     assert metrics.retrieval_recall is None
+    assert metrics.retrieval_precision is None
+    assert metrics.retrieval_mrr is None
     assert metrics.latency_pass is None
 
 

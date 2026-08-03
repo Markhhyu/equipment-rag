@@ -1,0 +1,12 @@
+# Grafana数据源自动配置。
+# 容器之间通过Docker服务名prometheus通信，不能写localhost。
+apiVersion: 1
+
+datasources:
+  - name: Equipment RAG Prometheus
+    type: prometheus
+    uid: equipment-rag-prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false

@@ -1,8 +1,10 @@
 import os
+import time
 import uuid
 from typing import List, Dict, Any
 from datetime import datetime
 import uvicorn
+from contextlib import asynccontextmanager
 # 第三方库
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import FileResponse
@@ -25,15 +27,28 @@ from app.security.auth import Principal, require_role
 from app.security.config import load_security_config
 from app.security.http import configure_http_security
 from app.security.tenancy import safe_upload_filename, tenant_object_prefix
+from app.observability.langfuse_monitor import flush_langfuse, trace_import
+from app.observability.prometheus_metrics import install_prometheus, observe_run
+from app.observability.rag_observability import score_import_result
+
+# 服务关闭时主动发送SDK缓存中的Langfuse事件，减少容器停止时丢失最后一批Trace的概率。
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    yield
+    flush_langfuse()
+
 
 # 初始化FastAPI应用实例
 # 标题和描述会在Swagger文档(http://ip:port/docs)中展示
 app = FastAPI(
     title="File Import Service",
-    description="Web service for uploading files to Knowledge Base (PDF/MD → 解析 → 切分 → 向量化 → Milvus/KG入库)"
+    description="Web service for uploading files to Knowledge Base (PDF/MD → 解析 → 切分 → 向量化 → Milvus/KG入库)",
+    lifespan=lifespan,
 )
 
 configure_http_security(app)
+# Prometheus只采集数值指标，不会采集上传文件内容。启动后访问 /metrics 可查看原始指标。
+install_prometheus(app, "import-api")
 
 
 @app.get("/health", tags=["system"])
@@ -87,6 +102,7 @@ def run_graph_task(
     :param local_dir: 该任务的本地文件存储目录（含临时文件/解析结果）
     :param local_file_path: 上传文件的本地绝对路径
     """
+    run_started = time.perf_counter()
     runtime_config = load_runtime_config()
     run_store = get_run_store()
     run_store.create(
@@ -116,19 +132,38 @@ def run_graph_task(
         init_state["local_dir"] = local_dir  # 任务本地目录
         init_state["local_file_path"] = local_file_path  # 上传文件本地路径
 
-        # 3. 流式执行LangGraph全流程（stream模式：实时获取每个节点的执行结果）
+        # 3. 建立文件导入根Trace，再在其中执行LangGraph。
+        # 每个业务节点已经由observed_graph_node包装，会自动成为根Trace的子Span。
         graph_input = None if resume else init_state
         graph_config = {
             "configurable": {"thread_id": task_id},
             "metadata": {"task_id": task_id, "kind": "import", "tenant_id": tenant_id},
         }
-        for event in kb_import_app.stream(graph_input, config=graph_config):
-            run_store.heartbeat(task_id, owner, runtime_config.lease_seconds)
-            for node_name, node_result in event.items():
-                # 记录每个节点完成的日志，包含任务ID和节点名，方便追踪执行顺序
-                logger.info(f"[{task_id}] LangGraph节点执行完成：{node_name}")
-                # 将完成的节点名加入【已完成列表】，前端轮询/status/{task_id}可实时获取
-                add_done_task(task_id, node_name)
+        with trace_import(task_id, tenant_id, os.path.basename(local_file_path)) as (observation, handler):
+            if handler is not None:
+                graph_config["callbacks"] = [handler]
+
+            for event in kb_import_app.stream(graph_input, config=graph_config):
+                run_store.heartbeat(task_id, owner, runtime_config.lease_seconds)
+                for node_name, node_result in event.items():
+                    logger.info(f"[{task_id}] LangGraph节点执行完成：{node_name}")
+                    add_done_task(task_id, node_name)
+
+            # 从LangGraph checkpoint读取最终状态，用于生成解析、切片、向量和入库质量报告。
+            final_state = dict(kb_import_app.get_state(graph_config).values or {})
+            quality_report = score_import_result(final_state)
+            if observation is not None:
+                observation.update(
+                    output={
+                        "status": "completed",
+                        "quality_proxy_score": quality_report["quality_proxy_score"],
+                        "parser": quality_report["parser"],
+                        "chunks": quality_report["chunks"],
+                        "embeddings": quality_report["embeddings"],
+                        "storage": quality_report["storage"],
+                        "recommendations": quality_report["recommendations"],
+                    }
+                )
 
         # 4. 全流程执行完成，更新任务全局状态为：已完成
         update_task_status(task_id, "completed")
@@ -142,6 +177,7 @@ def run_graph_task(
             },
         )
         logger.info(f"[{task_id}] LangGraph全流程执行完毕，任务完成")
+        observe_run("import", time.perf_counter() - run_started, "completed", quality_report)
 
     except Exception as e:
         # 5. 捕获全流程异常，更新任务全局状态为：失败，并记录错误日志（含堆栈）
@@ -151,6 +187,7 @@ def run_graph_task(
         except RuntimeError:
             logger.exception("持久化导入运行失败状态时发生异常")
         logger.error(f"[{task_id}] LangGraph全流程执行失败，异常信息：{str(e)}", exc_info=True)
+        observe_run("import", time.perf_counter() - run_started, "failed")
 
 
 # --------------------------

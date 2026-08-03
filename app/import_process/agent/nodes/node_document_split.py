@@ -11,12 +11,13 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from app.utils.task_utils import add_running_task
 from app.import_process.agent.state import ImportGraphState
 from app.core.logger import logger  # 项目统一日志工具，核心替换print
+from app.conf.rag_tuning_config import rag_tuning_config
 
 # --- 配置参数 (Configuration) ---
 # 单个Chunk最大字符长度：超过则触发二次切分（适配大模型上下文窗口）
-DEFAULT_MAX_CONTENT_LENGTH = 2000
+DEFAULT_MAX_CONTENT_LENGTH = rag_tuning_config.chunk_max_chars
 # 短Chunk合并阈值：同父标题的短Chunk会被合并，减少碎片化
-MIN_CONTENT_LENGTH = 500
+MIN_CONTENT_LENGTH = rag_tuning_config.chunk_min_chars
 
 
 def step_1_get_inputs(state: ImportGraphState) -> Tuple[Any, str, int]:

@@ -8,6 +8,7 @@ from app.core.logger import logger
 from app.core.load_prompt import load_prompt
 from dotenv import load_dotenv, find_dotenv
 from app.security.tenancy import escape_milvus_literal, tenant_filter
+from app.conf.rag_tuning_config import rag_tuning_config
 
 load_dotenv(find_dotenv())
 
@@ -193,7 +194,9 @@ def node_search_embedding_hyde(state):
             hyde_doc=hyde_doc,
             item_names=item_names,
             tenant_id=str(state.get("tenant_id") or "local"),
-            top_k=5,
+            req_limit=rag_tuning_config.retrieval_candidate_limit,
+            top_k=rag_tuning_config.retrieval_result_limit,
+            ranker_weights=(rag_tuning_config.dense_weight, rag_tuning_config.sparse_weight),
         )
         
         hit_count = len(res[0]) if res and len(res) > 0 else 0

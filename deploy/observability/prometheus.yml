@@ -1,0 +1,19 @@
+# Prometheus主配置。
+# Prometheus每15秒访问两个FastAPI服务的/metrics，把数值保存为时间序列。
+# 如果某个服务不健康，Prometheus页面的Targets菜单会显示DOWN，并给出错误原因。
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # 文件导入服务：观察解析、切片、Embedding和Milvus入库。
+  - job_name: equipment-rag-import
+    metrics_path: /metrics/
+    static_configs:
+      - targets: ["import-api:8000"]
+
+  # 查询服务：观察检索、HyDE、RRF、Rerank、回答和用户反馈。
+  - job_name: equipment-rag-query
+    metrics_path: /metrics/
+    static_configs:
+      - targets: ["query-api:8001"]

@@ -1,0 +1,14 @@
+# 告诉Grafana从固定目录自动加载仓库内的Dashboard JSON。
+# 修改JSON后重启Grafana即可重新加载，不需要在页面里手工导入。
+apiVersion: 1
+
+providers:
+  - name: Equipment RAG
+    orgId: 1
+    folder: Equipment RAG
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards

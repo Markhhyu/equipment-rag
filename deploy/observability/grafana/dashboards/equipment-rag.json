@@ -1,0 +1,88 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "equipment-rag-prometheus"},
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}},
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 0},
+      "id": 1,
+      "targets": [{"expr": "sum(rate(equipment_rag_agent_run_total{status=\"completed\"}[15m])) / clamp_min(sum(rate(equipment_rag_agent_run_total[15m])), 0.000001)", "refId": "A"}],
+      "title": "Agent运行成功率（15分钟）",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "equipment-rag-prometheus"},
+      "fieldConfig": {"defaults": {"unit": "s"}},
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 0},
+      "id": 2,
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (le) (rate(equipment_rag_http_request_duration_seconds_bucket[15m])))", "refId": "A"}],
+      "title": "HTTP P95延迟",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "equipment-rag-prometheus"},
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}},
+      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 0},
+      "id": 3,
+      "targets": [{"expr": "sum(rate(equipment_rag_import_quality_proxy_score_sum[1h])) / clamp_min(sum(rate(equipment_rag_import_quality_proxy_score_count[1h])), 0.000001)", "refId": "A"}],
+      "title": "文件导入质量代理分",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "equipment-rag-prometheus"},
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}},
+      "gridPos": {"h": 5, "w": 6, "x": 18, "y": 0},
+      "id": 4,
+      "targets": [{"expr": "sum(rate(equipment_rag_query_quality_proxy_score_sum[1h])) / clamp_min(sum(rate(equipment_rag_query_quality_proxy_score_count[1h])), 0.000001)", "refId": "A"}],
+      "title": "问答质量代理分",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "equipment-rag-prometheus"},
+      "fieldConfig": {"defaults": {"unit": "s"}},
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 5},
+      "id": 5,
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (le, kind, stage) (rate(equipment_rag_agent_stage_duration_seconds_bucket[15m])))", "legendFormat": "{{kind}} / {{stage}}", "refId": "A"}],
+      "title": "各Agent节点P95耗时",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "equipment-rag-prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 5},
+      "id": 6,
+      "targets": [{"expr": "sum by (source) (rate(equipment_rag_query_retrieval_count_sum[15m])) / clamp_min(sum by (source) (rate(equipment_rag_query_retrieval_count_count[15m])), 0.000001)", "legendFormat": "{{source}}", "refId": "A"}],
+      "title": "各检索阶段平均文档数",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "equipment-rag-prometheus"},
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 14},
+      "id": 7,
+      "targets": [{"expr": "equipment_rag_import_last_ratio", "legendFormat": "{{metric}}", "refId": "A"}],
+      "title": "最近一次文件导入完整率",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "equipment-rag-prometheus"},
+      "fieldConfig": {"defaults": {"unit": "reqps"}},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 14},
+      "id": 8,
+      "targets": [{"expr": "sum by (service, status) (rate(equipment_rag_http_requests_total[5m]))", "legendFormat": "{{service}} / {{status}}", "refId": "A"}],
+      "title": "HTTP请求速率与状态码",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "15s",
+  "schemaVersion": 40,
+  "tags": ["rag", "agent", "observability"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timezone": "browser",
+  "title": "Equipment RAG 可观测性",
+  "uid": "equipment-rag-observability",
+  "version": 1
+}
