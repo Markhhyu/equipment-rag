@@ -57,6 +57,7 @@ class ImageProcessingConfig:
     caption_max_retries: int
     caption_requests_per_minute: int
     min_image_bytes: int
+    max_image_bytes: int
     strong_caption_min_chars: int
     context_chars: int
     query_vision_enabled: bool
@@ -79,6 +80,8 @@ image_processing_config = ImageProcessingConfig(
     caption_requests_per_minute=_get_int("IMAGE_CAPTION_REQUESTS_PER_MINUTE", 30, minimum=1),
     # 图片文件过小时大概率是图标、Logo、页眉或装饰元素，默认不消耗视觉模型额度。
     min_image_bytes=_get_int("IMAGE_MIN_BYTES", 8192, minimum=0),
+    # 视觉模型调用前会把图片完整读入内存并转换为Base64，因此设置体积上限防止异常图片占用过多内存。
+    max_image_bytes=_get_int("IMAGE_MAX_BYTES", 20 * 1024 * 1024, minimum=1024),
     # 图注或上下文达到一定长度后，smart 模式认为已有足够语义，不再重复调用视觉模型。
     strong_caption_min_chars=_get_int("IMAGE_STRONG_CAPTION_MIN_CHARS", 12, minimum=1),
     # 保存图片前后文时限制字符数，既保留语义，又避免图片资产记录体积过大。
