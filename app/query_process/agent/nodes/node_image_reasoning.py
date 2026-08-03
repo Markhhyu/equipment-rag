@@ -5,6 +5,7 @@ import mimetypes
 import os
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -16,42 +17,31 @@ from app.conf.image_processing_config import image_processing_config
 from app.conf.lm_config import lm_config
 from app.core.logger import logger
 from app.lm.lm_utils import get_llm_client
+from app.observability.rag_observability import start_rag_observation, summarize_image_assets
 from app.query_process.agent.state import QueryGraphState
 from app.utils.task_utils import add_done_task, add_running_task
 
 
-# 明确出现这些词时，问题通常依赖图片中的空间位置、界面文字、连接关系或图形信息。
 EXPLICIT_VISUAL_PATTERN = re.compile(
     r"图中|图上|上图|下图|图片|截图|照片|界面|操作面板|控制面板|"
     r"接线图|连接图|拓扑图|流程图|示意图|结构图|原理图|图表|曲线|波形|"
     r"指示灯|图标|屏幕显示|画面显示"
 )
-
-# “按钮在哪里”“哪个接口”“端口位置”等问题没有直接说图片，但通常必须结合命中的设备图片判断。
 SPATIAL_OBJECT_PATTERN = re.compile(
     r"(?:按钮|按键|开关|旋钮|接口|端口|插口|插槽|部件|零件|指示灯|传感器|接头)"
     r".{0,12}(?:在哪|哪里|位置|哪个|哪一个|怎么接|如何连接|朝向|方向)"
     r"|(?:在哪|哪里|位置|哪个|哪一个)"
     r".{0,12}(?:按钮|按键|开关|旋钮|接口|端口|插口|插槽|部件|零件|指示灯|传感器|接头)"
 )
-
 MINIO_MARKDOWN_IMAGE_PATTERN = re.compile(r"!\[[^\]]*\]\((minio://[^)]+)\)")
 
 
 def is_visual_question(question: str) -> bool:
-    """
-    判断用户问题是否明显依赖图片信息。
-
-    使用确定性规则而不是额外调用大模型做分类，避免普通问题先消耗一次模型请求。
-    规则保持保守：只有明确涉及图片、界面、图形结构或具体部件空间位置时才触发视觉分析。
-    """
+    """使用确定性规则判断问题是否依赖图片、界面、连接关系或具体空间位置。"""
     normalized_question = re.sub(r"\s+", "", str(question or "")).lower()
     if not normalized_question:
         return False
-    return bool(
-        EXPLICIT_VISUAL_PATTERN.search(normalized_question)
-        or SPATIAL_OBJECT_PATTERN.search(normalized_question)
-    )
+    return bool(EXPLICIT_VISUAL_PATTERN.search(normalized_question) or SPATIAL_OBJECT_PATTERN.search(normalized_question))
 
 
 def _normalize_string_list(value: Any) -> List[str]:
@@ -63,33 +53,25 @@ def _normalize_string_list(value: Any) -> List[str]:
 
 
 def _collect_candidate_uris(reranked_docs: List[Dict[str, Any]]) -> List[str]:
-    """
-    按Reranker相关性顺序收集Chunk关联图片地址。
-
-    新数据优先读取image_object_uris动态字段；旧数据没有该字段时，再从Markdown正文提取minio://引用。
-    """
+    """按Reranker相关性顺序收集Chunk关联图片地址，并兼容旧Markdown数据。"""
     result: List[str] = []
     seen = set()
-
     for document in reranked_docs or []:
         if not isinstance(document, dict) or str(document.get("source") or "local") != "local":
             continue
-
         object_uris = _normalize_string_list(document.get("image_object_uris"))
         if not object_uris:
             object_uris = MINIO_MARKDOWN_IMAGE_PATTERN.findall(str(document.get("text") or ""))
-
         for object_uri in object_uris:
             if not object_uri.startswith("minio://") or object_uri in seen:
                 continue
             seen.add(object_uri)
             result.append(object_uri)
-
     return result
 
 
 def _build_fallback_asset(object_uri: str) -> Dict[str, Any]:
-    """旧数据在MongoDB中找不到图片资产时，使用Chunk中的MinIO地址构造最小候选对象。"""
+    """旧数据在MongoDB中找不到图片资产时，根据MinIO地址构造最小候选对象。"""
     return {
         "image_id": "",
         "document_id": "",
@@ -105,20 +87,14 @@ def _build_fallback_asset(object_uri: str) -> Dict[str, Any]:
 
 
 def _load_candidate_assets(tenant_id: str, object_uris: List[str]) -> List[Dict[str, Any]]:
-    """
-    从MongoDB批量读取图片资产，并按Chunk相关性顺序补齐旧数据候选。
-
-    MongoDB查询失败时直接使用MinIO地址构造候选，保证图片问答不会因为图片资产集合异常而完全失效。
-    """
+    """批量加载图片资产；MongoDB异常时使用MinIO地址降级，避免阻断文本问答。"""
     if not object_uris:
         return []
-
     try:
         stored_assets = get_image_asset_tool().get_assets_by_object_uris(tenant_id, object_uris)
     except Exception as exc:
         logger.error(f"查询图片资产失败，已降级使用Chunk中的MinIO地址：{exc}", exc_info=True)
         stored_assets = []
-
     asset_by_uri = {
         str(asset.get("object_uri") or ""): asset
         for asset in stored_assets
@@ -128,7 +104,7 @@ def _load_candidate_assets(tenant_id: str, object_uris: List[str]) -> List[Dict[
 
 
 def _best_cached_description(asset: Dict[str, Any]) -> str:
-    """按视觉描述、结构化图注、基础描述和原始替代文本的优先级读取已缓存图片语义。"""
+    """按视觉描述、结构化图注、基础描述和替代文本的优先级读取已缓存语义。"""
     for field in ("visual_description", "structured_caption", "base_description", "alt_text"):
         description = " ".join(str(asset.get(field) or "").split()).strip()
         if description:
@@ -137,7 +113,7 @@ def _best_cached_description(asset: Dict[str, Any]) -> str:
 
 
 def _format_asset_location(asset: Dict[str, Any], index: int) -> str:
-    """生成稳定的图片编号、文档名和页码描述，供视觉模型和最终回答引用。"""
+    """生成稳定的图片编号、文档名和页码描述。"""
     document_name = str(asset.get("document_name") or asset.get("filename") or "未知文档").strip()
     page_number = asset.get("page_number")
     page_text = f"第{page_number}页" if isinstance(page_number, int) and page_number > 0 else "页码未知"
@@ -145,10 +121,9 @@ def _format_asset_location(asset: Dict[str, Any], index: int) -> str:
 
 
 def _build_cached_context(assets: List[Dict[str, Any]]) -> str:
-    """把后台异步生成的通用图片说明整理为可直接加入回答Prompt的降级上下文。"""
+    """把后台通用图片说明整理为最终回答可以使用的降级上下文。"""
     if not assets:
         return ""
-
     lines = ["【相关图片的已缓存说明】"]
     for index, asset in enumerate(assets, start=1):
         lines.append(f"- {_format_asset_location(asset, index)}：{_best_cached_description(asset)}")
@@ -157,11 +132,7 @@ def _build_cached_context(assets: List[Dict[str, Any]]) -> str:
 
 
 def _read_image_data_url(asset: Dict[str, Any]) -> Tuple[str, str]:
-    """
-    从MinIO下载图片、校验体积并转换为视觉模型需要的Data URL。
-
-    返回Data URL和临时文件路径，临时文件由调用方在finally中统一删除。
-    """
+    """下载MinIO图片、校验体积并转换为视觉模型需要的Data URL。"""
     object_uri = str(asset.get("object_uri") or "").strip()
     if not object_uri.startswith("minio://"):
         raise ValueError(f"图片缺少有效MinIO地址：{object_uri}")
@@ -207,10 +178,9 @@ def _extract_response_text(content: Any) -> str:
 
 def _invoke_query_vision(question: str, assets: List[Dict[str, Any]]) -> Tuple[str, List[Dict[str, Any]]]:
     """
-    使用一次多图请求回答当前视觉问题。
+    使用一次多图请求回答当前视觉问题，并创建Langfuse Generation。
 
-    单次请求最多包含QUERY_IMAGE_TOP_K张图片，既保留跨图对比能力，也避免逐张调用造成高延迟和额外费用。
-    下载失败的单张图片会被跳过；只要仍有一张可用图片，视觉分析就继续执行。
+    Generation输入只记录问题、图片数量和轻量资产摘要，不记录Base64、MinIO地址或完整缓存描述。
     """
     content: List[Dict[str, Any]] = [
         {
@@ -236,17 +206,12 @@ def _invoke_query_vision(question: str, assets: List[Dict[str, Any]]) -> Tuple[s
                 content.append(
                     {
                         "type": "text",
-                        "text": (
-                            f"{_format_asset_location(asset, index)}。"
-                            f"已缓存说明：{_best_cached_description(asset)}"
-                        ),
+                        "text": f"{_format_asset_location(asset, index)}。已缓存说明：{_best_cached_description(asset)}",
                     }
                 )
                 content.append({"type": "image_url", "image_url": {"url": data_url}})
             except Exception as exc:
-                logger.warning(
-                    f"查询视觉分析跳过一张不可用图片：uri={asset.get('object_uri')}，原因={exc}"
-                )
+                logger.warning(f"查询视觉分析跳过一张不可用图片：uri={asset.get('object_uri')}，原因={exc}")
 
         if not available_assets:
             raise ValueError("候选图片均无法读取")
@@ -256,11 +221,51 @@ def _invoke_query_vision(question: str, assets: List[Dict[str, Any]]) -> Tuple[s
             timeout_seconds=image_processing_config.query_vision_timeout_seconds,
             max_retries=0,
         )
-        response = vision_client.invoke([HumanMessage(content=content)])
-        analysis = _extract_response_text(getattr(response, "content", ""))
-        if not analysis:
-            raise ValueError("视觉模型返回空分析结果")
-        return analysis[:2000], available_assets
+        started = time.perf_counter()
+        with start_rag_observation(
+            as_type="generation",
+            name="vision-generation",
+            input_data={
+                "question": question,
+                "requested_image_count": len(assets),
+                "available_image_count": len(available_assets),
+                "images": summarize_image_assets(available_assets),
+            },
+            metadata={
+                "pipeline": "query",
+                "stage": "image_reasoning",
+                "timeout_seconds": image_processing_config.query_vision_timeout_seconds,
+                "max_retries": 0,
+            },
+            model=lm_config.lv_model,
+        ) as generation_observation:
+            try:
+                response = vision_client.invoke([HumanMessage(content=content)])
+                analysis = _extract_response_text(getattr(response, "content", ""))
+                if not analysis:
+                    raise ValueError("视觉模型返回空分析结果")
+                analysis = analysis[:2000]
+                if generation_observation is not None:
+                    generation_observation.update(
+                        output={
+                            "status": "completed",
+                            "analysis_length": len(analysis),
+                            "used_image_count": len(available_assets),
+                            "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+                        }
+                    )
+                return analysis, available_assets
+            except Exception as exc:
+                if generation_observation is not None:
+                    generation_observation.update(
+                        output={
+                            "status": "failed",
+                            "error_type": type(exc).__name__,
+                            "used_image_count": len(available_assets),
+                            "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+                        }
+                    )
+                raise
     finally:
         for temp_path in temp_paths:
             try:
@@ -271,15 +276,32 @@ def _invoke_query_vision(question: str, assets: List[Dict[str, Any]]) -> Tuple[s
                 logger.warning(f"查询视觉临时文件清理失败：{temp_path}，原因={exc}")
 
 
+def _update_selection_observation(
+    observation: Any,
+    *,
+    status: str,
+    candidate_count: int,
+    selected_assets: List[Dict[str, Any]],
+) -> None:
+    """写入图片选择结果摘要；Langfuse关闭时安全跳过。"""
+    if observation is None:
+        return
+    observation.update(
+        output={
+            "status": status,
+            "candidate_count": candidate_count,
+            "selected_count": len(selected_assets),
+            "selected_images": summarize_image_assets(selected_assets),
+        }
+    )
+
+
 def node_image_reasoning(state: QueryGraphState) -> Dict[str, Any]:
     """
     查询阶段按需执行图片视觉分析。
 
-    处理原则：
-    1. 普通文字问题直接跳过，视觉模型调用次数为零；
-    2. 视觉问题只选择Reranker最相关Chunk中的前N张图片；
-    3. 先加载后台缓存描述作为降级上下文，再执行一次查询相关的多图分析；
-    4. MongoDB、MinIO或视觉模型异常只影响图片补充信息，不中断文本RAG回答。
+    普通问题不创建视觉Generation；视觉问题只选择重排结果中最相关的前N张图片，
+    MongoDB、MinIO或视觉模型异常只影响图片补充信息，不中断文本RAG回答。
     """
     logger.info("---node_image_reasoning开始处理---")
     node_name = sys._getframe().f_code.co_name
@@ -290,32 +312,65 @@ def node_image_reasoning(state: QueryGraphState) -> Dict[str, Any]:
     try:
         question = str(state.get("rewritten_query") or state.get("original_query") or "").strip()
         need_visual_reasoning = is_visual_question(question)
-        if not need_visual_reasoning:
-            logger.info("当前问题未命中视觉意图规则，跳过查询阶段视觉模型调用")
-            return {
-                "need_visual_reasoning": False,
-                "image_reasoning_status": "not_required",
-                "image_assets": [],
-                "image_analysis_context": "",
-                "image_reasoning_object_uris": [],
-            }
 
-        candidate_uris = _collect_candidate_uris(state.get("reranked_docs") or [])
-        selected_uris = candidate_uris[: image_processing_config.query_image_top_k]
-        if not selected_uris:
-            logger.info("当前问题需要图片信息，但重排后的Chunk没有关联图片")
-            return {
-                "need_visual_reasoning": True,
-                "image_reasoning_status": "no_candidate_images",
-                "image_assets": [],
-                "image_analysis_context": "",
-                "image_reasoning_object_uris": [],
-            }
+        with start_rag_observation(
+            as_type="span",
+            name="image-selection",
+            input_data={
+                "question": question,
+                "reranked_document_count": len(state.get("reranked_docs") or []),
+            },
+            metadata={
+                "pipeline": "query",
+                "stage": "image_reasoning",
+                "query_image_top_k": image_processing_config.query_image_top_k,
+                "vision_enabled": image_processing_config.query_vision_enabled,
+            },
+        ) as selection_observation:
+            if not need_visual_reasoning:
+                _update_selection_observation(
+                    selection_observation,
+                    status="not_required",
+                    candidate_count=0,
+                    selected_assets=[],
+                )
+                logger.info("当前问题未命中视觉意图规则，跳过查询阶段视觉模型调用")
+                return {
+                    "need_visual_reasoning": False,
+                    "image_reasoning_status": "not_required",
+                    "image_assets": [],
+                    "image_analysis_context": "",
+                    "image_reasoning_object_uris": [],
+                }
 
-        tenant_id = str(state.get("tenant_id") or "local")
-        selected_assets = _load_candidate_assets(tenant_id, selected_uris)
+            candidate_uris = _collect_candidate_uris(state.get("reranked_docs") or [])
+            selected_uris = candidate_uris[: image_processing_config.query_image_top_k]
+            if not selected_uris:
+                _update_selection_observation(
+                    selection_observation,
+                    status="no_candidate_images",
+                    candidate_count=len(candidate_uris),
+                    selected_assets=[],
+                )
+                logger.info("当前问题需要图片信息，但重排后的Chunk没有关联图片")
+                return {
+                    "need_visual_reasoning": True,
+                    "image_reasoning_status": "no_candidate_images",
+                    "image_assets": [],
+                    "image_analysis_context": "",
+                    "image_reasoning_object_uris": [],
+                }
+
+            tenant_id = str(state.get("tenant_id") or "local")
+            selected_assets = _load_candidate_assets(tenant_id, selected_uris)
+            _update_selection_observation(
+                selection_observation,
+                status="selected",
+                candidate_count=len(candidate_uris),
+                selected_assets=selected_assets,
+            )
+
         cached_context = _build_cached_context(selected_assets)
-
         if not image_processing_config.query_vision_enabled:
             logger.info("查询阶段视觉模型已关闭，使用后台缓存图片说明继续回答")
             return {
