@@ -1,138 +1,92 @@
+from contextlib import asynccontextmanager
 from pathlib import Path
 import time
 import uuid
+from typing import Literal, Optional
+
 import uvicorn
-from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
-from contextlib import asynccontextmanager
-from app.observability.rag_observability import score_query_result
+
+from app.clients.minio_utils import resolve_object_urls
+from app.clients.mongo_history_utils import *
+from app.core.logger import logger
+from app.observability.langfuse_monitor import (
+    create_query_trace_id,
+    flush_langfuse,
+    submit_trace_feedback,
+    trace_query,
+)
 from app.observability.prometheus_metrics import install_prometheus, observe_feedback, observe_run
 from app.observability.quality_metrics import analyze_query_state
-
-from app.core.logger import logger
-from app.observability.langfuse_monitor import flush_langfuse
-
-from app.utils.task_utils import *
-from app.utils.sse_utils import create_sse_queue, SSEEvent, sse_generator
-from app.clients.mongo_history_utils import *
-from app.clients.minio_utils import resolve_object_urls
+from app.observability.rag_observability import score_query_result, summarize_image_reasoning
 from app.runtime.config import load_runtime_config
 from app.runtime.run_store import RunStatus, get_run_store, run_owner
 from app.security.auth import Principal, require_role
 from app.security.http import configure_http_security
 from app.security.tenancy import scoped_session_id
-
-# Literal用于限制反馈值只能是0或1。
-from typing import Literal, Optional
-
-# Langfuse监控和反馈相关工具。
-from app.observability.langfuse_monitor import (
-    create_query_trace_id,
-    submit_trace_feedback,
-    trace_query
-)
-
-# 后续导入启动图对象
-# 如需直接复用预编译图，可从 app.query_process.main_graph 导入 query_app。
+from app.utils.sse_utils import SSEEvent, create_sse_queue, push_to_session, sse_generator
+from app.utils.task_utils import *
 
 
-# 定义fastapi对象
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     yield
     flush_langfuse()
 
 
-app = FastAPI(title="query service", description="设备文档Agent查询服务", lifespan=lifespan)# 跨域问题解决
+app = FastAPI(title="query service", description="设备文档Agent查询服务", lifespan=lifespan)
 configure_http_security(app)
-# /metrics供Prometheus抓取。指标不包含问题、答案、Trace ID等敏感或高基数内容。
 install_prometheus(app, "query-api")
 
-# 返回chat.html页面
-@app.get("/chat.html")  # 对外访问地址
+
+@app.get("/chat.html")
 async def chat():
-    # 从 api -> query_process
+    """返回查询页面。"""
     current_dir_parent_path = Path(__file__).absolute().parent.parent
-    # 定义chat.html位置
     chat_html_path = current_dir_parent_path / "page" / "chat.html"
-    # 如果不存在，抛出404异常
     if not chat_html_path.exists():
         raise HTTPException(status_code=404, detail=f"没有查询到页面，地址为：{chat_html_path}！")
     return FileResponse(chat_html_path)
 
-# 定义接口接收的数据结构
+
 class QueryRequest(BaseModel):
-    """查询请求数据结构"""
-    query: str = Field(..., description="查询内容")  # ...必须填写
+    """查询请求数据结构。"""
+
+    query: str = Field(..., description="查询内容")
     session_id: str = Field(None, description="会话ID")
     is_stream: bool = Field(False, description="是否流式返回")
 
+
 class FeedbackRequest(BaseModel):
-    """
-    用户反馈请求数据结构。
+    """用户反馈请求数据结构。"""
 
-    前端点赞时发送value=1；
-    前端点踩时发送value=0。
-    """
-
-    # 本轮回答对应的Langfuse Trace ID。
-    trace_id: str = Field(
-        ...,
-        min_length=32,
-        max_length=32,
-        description="Langfuse Trace ID"
-    )
-
-    # Literal限制JSON中的value只能是0或者1。
-    value: Literal[0, 1] = Field(
-        ...,
-        description="1表示点赞，0表示点踩"
-    )
-
-    # 用户可选的补充说明。
-    comment: Optional[str] = Field(
-        default=None,
-        max_length=500,
-        description="用户反馈说明"
-    )
+    trace_id: str = Field(..., min_length=32, max_length=32, description="Langfuse Trace ID")
+    value: Literal[0, 1] = Field(..., description="1表示点赞，0表示点踩")
+    comment: Optional[str] = Field(default=None, max_length=500, description="用户反馈说明")
 
 
-# 证明服务器启动即可
 @app.get("/health")
 async def health():
-    """
-    检查服务是否正常
-    """
+    """检查服务是否正常。"""
     return {"ok": True}
 
 
-# 定义查询接口
 def run_query_graph(
-        session_id: str,
-        user_query: str,
-        is_stream: bool,
-        trace_id: str,
-        resume: bool = False,
-        tenant_id: str = "local",
+    session_id: str,
+    user_query: str,
+    is_stream: bool,
+    trace_id: str,
+    resume: bool = False,
+    tenant_id: str = "local",
 ):
-    """
-    执行一次完整问答流程。
-
-    :param session_id: 多轮会话ID。
-    :param user_query: 用户原始问题。
-    :param is_stream: 是否流式返回。
-    :param trace_id: 当前这轮问答对应的Langfuse Trace ID。
-    """
-
+    """执行一次完整问答流程。"""
     run_started = time.perf_counter()
     internal_session_id = scoped_session_id(tenant_id, session_id)
     logger.info(
-        f"开始执行问答流程，"
-        f"tenant_id={tenant_id}，"
-        f"session_id={session_id}，"
-        f"trace_id={trace_id}，"
-        f"is_stream={is_stream}"
+        f"开始执行问答流程，tenant_id={tenant_id}，session_id={session_id}，"
+        f"trace_id={trace_id}，is_stream={is_stream}"
     )
 
     runtime_config = load_runtime_config()
@@ -152,113 +106,71 @@ def run_query_graph(
     owner = run_owner()
     run_store.claim(trace_id, owner, runtime_config.lease_seconds)
 
-    # 构造LangGraph初始状态。
-    # trace_id放入State后，后续回答节点可以将它保存到MongoDB。
     default_state = {
         "original_query": user_query,
         "session_id": internal_session_id,
         "tenant_id": tenant_id,
         "trace_id": trace_id,
-        "is_stream": is_stream
+        "is_stream": is_stream,
     }
 
     try:
         from app.query_process.agent.main_graph import query_app
 
-        # 创建本轮问答的Langfuse根Trace。
         with trace_query(
-                session_id=internal_session_id,
-                user_query=user_query,
-                is_stream=is_stream,
-                trace_id=trace_id
+            session_id=internal_session_id,
+            user_query=user_query,
+            is_stream=is_stream,
+            trace_id=trace_id,
         ) as (observation, handler):
-
-            # LangGraph运行配置。
             config = {
                 "run_name": "equipment-query-graph",
-                "configurable": {
-                    "thread_id": trace_id,
-                },
-                "tags": [
-                    "equipment-rag",
-                    "query"
-                ],
+                "configurable": {"thread_id": trace_id},
+                "tags": ["equipment-rag", "query"],
                 "metadata": {
                     "session_id": internal_session_id,
                     "tenant_id": tenant_id,
                     "trace_id": trace_id,
-                    "is_stream": is_stream
-                }
+                    "is_stream": is_stream,
+                },
             }
-
-            # Langfuse开启时添加自动追踪回调。
             if handler is not None:
                 config["callbacks"] = [handler]
 
-            # 按节点边界流式执行并刷新租约。恢复时传入None，
-            # LangGraph会从该thread最后成功的checkpoint继续。
             graph_input = None if resume else default_state
             final_state = None
-            for state_snapshot in query_app.stream(
-                graph_input,
-                config=config,
-                stream_mode="values",
-            ):
+            for state_snapshot in query_app.stream(graph_input, config=config, stream_mode="values"):
                 final_state = state_snapshot
                 run_store.heartbeat(trace_id, owner, runtime_config.lease_seconds)
 
             if final_state is None:
                 final_state = query_app.get_state(config).values
 
-            # 写入自动基础评分。
             score_query_result(final_state)
             quality_report = analyze_query_state(final_state)
+            visual_summary = summarize_image_reasoning(final_state)
 
-            # 更新根Observation最终输出。
             if observation is not None:
                 observation.update(
                     output={
                         "status": "completed",
-                        "answer": final_state.get(
-                            "answer",
-                            ""
-                        ),
-                        "rewritten_query": final_state.get(
-                            "rewritten_query",
-                            ""
-                        ),
-                        "item_names": final_state.get(
-                            "item_names",
-                            []
-                        ),
-                        "retrieved_count": len(
-                            final_state.get(
-                                "reranked_docs"
-                            ) or []
-                        )
+                        "answer": final_state.get("answer", ""),
+                        "rewritten_query": final_state.get("rewritten_query", ""),
+                        "item_names": final_state.get("item_names", []),
+                        "retrieved_count": len(final_state.get("reranked_docs") or []),
+                        "visual": visual_summary,
                     }
                 )
 
-        # 将Trace ID保存到当前任务结果。
-        # 后面扩展/status接口时也可以直接读取。
-        set_task_result(
-            internal_session_id,
-            "trace_id",
-            trace_id
-        )
-
-        # 更新任务状态为完成。
-        update_task_status(
-            internal_session_id,
-            TASK_STATUS_COMPLETED,
-            is_stream
-        )
+        set_task_result(internal_session_id, "trace_id", trace_id)
+        update_task_status(internal_session_id, TASK_STATUS_COMPLETED, is_stream)
 
         retrieved_source_ids = []
         for doc in final_state.get("reranked_docs") or []:
             source_id = doc.get("chunk_id") or doc.get("url")
             if source_id is not None:
                 retrieved_source_ids.append(str(source_id))
+
         run_store.complete(
             trace_id,
             owner,
@@ -269,45 +181,31 @@ def run_query_graph(
                 "answer": final_state.get("answer", ""),
                 "retrieved_source_ids": retrieved_source_ids,
                 "clarified": quality_report["response"]["clarified"],
+                "visual": visual_summary,
             },
         )
 
         logger.info(
-            f"问答流程执行完成，"
-            f"session_id={session_id}，"
-            f"trace_id={trace_id}"
+            f"问答流程执行完成，session_id={session_id}，trace_id={trace_id}，"
+            f"视觉状态={visual_summary.get('status')}，图片数={visual_summary.get('selected_image_count')}"
         )
         observe_run("query", time.perf_counter() - run_started, "completed", quality_report)
         return final_state
-
-    except Exception as e:
+    except Exception as exc:
         logger.exception(
-            f"问答流程执行异常，"
-            f"session_id={session_id}，"
-            f"trace_id={trace_id}，"
-            f"错误={e}"
+            f"问答流程执行异常，session_id={session_id}，trace_id={trace_id}，错误={exc}"
         )
-
-        # 更新任务状态为失败。
-        update_task_status(
-            internal_session_id,
-            TASK_STATUS_FAILED,
-            is_stream
-        )
+        update_task_status(internal_session_id, TASK_STATUS_FAILED, is_stream)
         try:
-            run_store.fail(trace_id, owner, str(e))
+            run_store.fail(trace_id, owner, str(exc))
         except RuntimeError:
             logger.exception("持久化问答运行失败状态时发生异常")
 
-        # 流式问答发生异常时，将错误推送给页面。
         if is_stream:
             push_to_session(
                 internal_session_id,
                 SSEEvent.ERROR,
-                {
-                    "error": str(e),
-                    "trace_id": trace_id
-                }
+                {"error": str(exc), "trace_id": trace_id},
             )
         observe_run("query", time.perf_counter() - run_started, "failed")
         return None
@@ -319,23 +217,14 @@ async def query(
     request: QueryRequest,
     principal: Principal = Depends(require_role("query")),
 ):
-    """
-    1 解析参数
-    2 更新任务状态
-    3 调用处理流程图
-    4 返回结果
-    :param background_tasks:
-    :param request:
-    :return:
-    """
+    """提交设备知识问答请求。"""
     user_query = request.query
     session_id = request.session_id if request.session_id else str(uuid.uuid4())
     try:
         internal_session_id = scoped_session_id(principal.tenant_id, session_id)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    # 每一次提问都生成独立Trace ID。
-    # session_id代表整个对话，trace_id代表当前这一轮问答。
+
     try:
         trace_id = create_query_trace_id()
     except RuntimeError as exc:
@@ -356,21 +245,12 @@ async def query(
         tenant_id=principal.tenant_id,
     )
 
-    # 处理是不是流式返回结果
     is_stream = request.is_stream
     if is_stream:
-        # 创建一个字典 存储对一个session_id : queue 结果队列
         create_sse_queue(internal_session_id)
-    # 更新任务状态
-    # 当前会话id作为key! 整体装填处于运行中！
     update_task_status(internal_session_id, TASK_STATUS_PROCESSING, is_stream)
 
-    print("开始处理流程... 是否流式:", is_stream, f"其他参数:{user_query}, session_id:{session_id}")
-
     if is_stream:
-        # 如果是流式，则返回一个流式响应，过程不断地推送
-        # 运行执行图对象方法
-        # 后台执行LangGraph时，把预先生成的Trace ID一起传入。
         background_tasks.add_task(
             run_query_graph,
             session_id,
@@ -379,43 +259,42 @@ async def query(
             trace_id,
             False,
             principal.tenant_id,
-        )        # 返回结果
-        print("开始处理结果....")
+        )
         return {
             "message": "结果正在处理中...",
             "session_id": session_id,
-
-            # 前端收到Trace ID后，在回答完成时显示反馈按钮。
-            "trace_id": trace_id
-        }
-    else:
-        # 同步运行
-        final_state = run_query_graph(
-            session_id,
-            user_query,
-            is_stream,
-            trace_id,
-            False,
-            principal.tenant_id,
-        )
-        run_record = run_store.get_for_tenant(trace_id, principal.tenant_id)
-        if final_state is None or run_record is None or run_record.status == RunStatus.FAILED:
-            detail = run_record.error if run_record else "Agent run failed"
-            raise HTTPException(status_code=500, detail=detail)
-        answer = run_record.result.get("answer") or get_task_result(internal_session_id, "answer", "")
-        return {
-            "message": "处理完成！",
-            "session_id": session_id,
             "trace_id": trace_id,
-            "answer": answer,
-            "retrieved_source_ids": run_record.result.get("retrieved_source_ids", []),
-            "clarified": run_record.result.get("clarified", False),
-            "done_list": []
         }
+
+    final_state = run_query_graph(
+        session_id,
+        user_query,
+        is_stream,
+        trace_id,
+        False,
+        principal.tenant_id,
+    )
+    run_record = run_store.get_for_tenant(trace_id, principal.tenant_id)
+    if final_state is None or run_record is None or run_record.status == RunStatus.FAILED:
+        detail = run_record.error if run_record else "Agent run failed"
+        raise HTTPException(status_code=500, detail=detail)
+
+    answer = run_record.result.get("answer") or get_task_result(internal_session_id, "answer", "")
+    return {
+        "message": "处理完成！",
+        "session_id": session_id,
+        "trace_id": trace_id,
+        "answer": answer,
+        "retrieved_source_ids": run_record.result.get("retrieved_source_ids", []),
+        "clarified": run_record.result.get("clarified", False),
+        "visual": run_record.result.get("visual", {}),
+        "done_list": [],
+    }
 
 
 @app.get("/runs/{run_id}", tags=["runtime"])
 async def get_run(run_id: str, principal: Principal = Depends(require_role("query"))):
+    """读取指定问答运行记录。"""
     run = get_run_store().get_for_tenant(run_id, principal.tenant_id)
     if run is None or run.kind != "query":
         raise HTTPException(status_code=404, detail="Query run not found")
@@ -428,6 +307,7 @@ async def retry_run(
     background_tasks: BackgroundTasks,
     principal: Principal = Depends(require_role("query")),
 ):
+    """从最近一次成功检查点重试问答流程。"""
     run_store = get_run_store()
     run = run_store.get_for_tenant(run_id, principal.tenant_id)
     if run is None or run.kind != "query":
@@ -459,73 +339,43 @@ async def submit_feedback(
     request: FeedbackRequest,
     principal: Principal = Depends(require_role("query")),
 ):
-    """
-    接收聊天页面的点赞或点踩。
-
-    请求示例：
-    {
-        "trace_id": "32位Trace ID",
-        "value": 1,
-        "comment": "回答很有帮助"
-    }
-    """
-
+    """接收聊天页面点赞或点踩，并同步写入Langfuse和MongoDB。"""
     try:
         run = get_run_store().get_for_tenant(request.trace_id, principal.tenant_id)
         if run is None or run.kind != "query":
             raise HTTPException(status_code=404, detail="Query run not found")
-        # 将反馈写入Langfuse Score。
-        # 第一份反馈写入Langfuse，用于质量统计和筛选。
-        submit_trace_feedback(request.trace_id, request.value, request.comment or "")
 
-        # 第二份反馈写入MongoDB，用于页面刷新后恢复按钮状态。
-        matched_count = update_message_feedback(request.trace_id, request.value, request.comment or "")
+        submit_trace_feedback(request.trace_id, request.value, request.comment or "")
+        matched_count = update_message_feedback(
+            request.trace_id,
+            request.value,
+            request.comment or "",
+        )
         observe_feedback(request.value)
 
         if matched_count == 0:
             logger.warning(f"反馈已处理，但MongoDB未找到对应回答，trace_id={request.trace_id}")
 
         logger.info(
-            f"用户反馈提交成功，"
-            f"trace_id={request.trace_id}，"
-            f"value={request.value}"
+            f"用户反馈提交成功，trace_id={request.trace_id}，value={request.value}"
         )
-
         return {
             "message": "反馈已记录",
             "trace_id": request.trace_id,
             "value": request.value,
-            "history_updated": matched_count > 0
+            "history_updated": matched_count > 0,
         }
-
-    except ValueError as e:
-        # 参数格式错误时返回400。
-        raise HTTPException(
-            status_code=400,
-            detail=str(e)
-        )
-
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except HTTPException:
         raise
-
-    except RuntimeError as e:
-        # Langfuse未启用或不可用时返回503。
-        raise HTTPException(
-            status_code=503,
-            detail=str(e)
-        )
-
-    except Exception as e:
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
         logger.exception(
-            f"用户反馈提交失败，"
-            f"trace_id={request.trace_id}，"
-            f"错误={e}"
+            f"用户反馈提交失败，trace_id={request.trace_id}，错误={exc}"
         )
-
-        raise HTTPException(
-            status_code=500,
-            detail="用户反馈提交失败"
-        )
+        raise HTTPException(status_code=500, detail="用户反馈提交失败") from exc
 
 
 @app.get("/stream/{session_id}")
@@ -534,10 +384,7 @@ async def stream(
     request: Request,
     principal: Principal = Depends(require_role("query")),
 ):
-    print("调用流式/stream...")
-    """
-    sse 实时返回结果
-    """
+    """通过SSE实时返回问答结果。"""
     try:
         internal_session_id = scoped_session_id(principal.tenant_id, session_id)
     except ValueError as exc:
@@ -548,8 +395,8 @@ async def stream(
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"
-        }
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -559,30 +406,30 @@ async def history(
     limit: int = 50,
     principal: Principal = Depends(require_role("query")),
 ):
-    """
-    查询当前会话历史记录
-    """
+    """查询当前会话历史记录。"""
     try:
         internal_session_id = scoped_session_id(principal.tenant_id, session_id)
         records = get_recent_messages(internal_session_id, limit=limit)
         items = []
-        for r in records:
-            items.append({
-                "_id": str(r.get("_id")) if r.get("_id") is not None else "",
-                "session_id": session_id,
-                "role": r.get("role", ""),
-                "text": r.get("text", ""),
-                "rewritten_query": r.get("rewritten_query", ""),
-                "item_names": r.get("item_names", []),
-                "image_urls": resolve_object_urls(r.get("image_urls", [])),
-                "trace_id": r.get("trace_id", ""),
-                "feedback_value": r.get("feedback_value"),
-                "feedback_comment": r.get("feedback_comment", ""),
-                "ts": r.get("ts")
-            })
+        for record in records:
+            items.append(
+                {
+                    "_id": str(record.get("_id")) if record.get("_id") is not None else "",
+                    "session_id": session_id,
+                    "role": record.get("role", ""),
+                    "text": record.get("text", ""),
+                    "rewritten_query": record.get("rewritten_query", ""),
+                    "item_names": record.get("item_names", []),
+                    "image_urls": resolve_object_urls(record.get("image_urls", [])),
+                    "trace_id": record.get("trace_id", ""),
+                    "feedback_value": record.get("feedback_value"),
+                    "feedback_comment": record.get("feedback_comment", ""),
+                    "ts": record.get("ts"),
+                }
+            )
         return {"session_id": session_id, "items": items}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"history error: {e}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"history error: {exc}") from exc
 
 
 @app.delete("/history/{session_id}")
@@ -590,6 +437,7 @@ async def clear_chat_history(
     session_id: str,
     principal: Principal = Depends(require_role("query")),
 ):
+    """清空当前租户和会话的历史记录。"""
     try:
         internal_session_id = scoped_session_id(principal.tenant_id, session_id)
     except ValueError as exc:
