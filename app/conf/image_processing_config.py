@@ -50,12 +50,15 @@ class ImageProcessingConfig:
     asset_collection: str
     enrichment_async: bool
     enrichment_workers: int
+    enrichment_poll_seconds: int
+    enrichment_lease_seconds: int
     caption_max_per_document: int
     caption_timeout_seconds: int
     caption_max_retries: int
     caption_requests_per_minute: int
     min_image_bytes: int
     strong_caption_min_chars: int
+    context_chars: int
     query_vision_enabled: bool
     query_image_top_k: int
     query_vision_timeout_seconds: int
@@ -66,6 +69,10 @@ image_processing_config = ImageProcessingConfig(
     asset_collection=(os.getenv("IMAGE_ASSET_COLLECTION") or "document_image_assets").strip(),
     enrichment_async=_get_bool("IMAGE_ENRICHMENT_ASYNC", True),
     enrichment_workers=_get_int("IMAGE_ENRICHMENT_WORKERS", 2, minimum=1),
+    # Worker 没有待处理图片时按该间隔休眠，避免持续轮询 MongoDB 造成无效负载。
+    enrichment_poll_seconds=_get_int("IMAGE_ENRICHMENT_POLL_SECONDS", 3, minimum=1),
+    # 图片被 Worker 领取后会获得处理租约；服务异常退出后，租约过期的图片可被其他 Worker 重新领取。
+    enrichment_lease_seconds=_get_int("IMAGE_ENRICHMENT_LEASE_SECONDS", 180, minimum=30),
     caption_max_per_document=_get_int("IMAGE_CAPTION_MAX_PER_DOCUMENT", 30, minimum=1),
     caption_timeout_seconds=_get_int("IMAGE_CAPTION_TIMEOUT_SECONDS", 45, minimum=5),
     caption_max_retries=_get_int("IMAGE_CAPTION_MAX_RETRIES", 1, minimum=0),
@@ -74,6 +81,8 @@ image_processing_config = ImageProcessingConfig(
     min_image_bytes=_get_int("IMAGE_MIN_BYTES", 8192, minimum=0),
     # 图注或上下文达到一定长度后，smart 模式认为已有足够语义，不再重复调用视觉模型。
     strong_caption_min_chars=_get_int("IMAGE_STRONG_CAPTION_MIN_CHARS", 12, minimum=1),
+    # 保存图片前后文时限制字符数，既保留语义，又避免图片资产记录体积过大。
+    context_chars=_get_int("IMAGE_CONTEXT_CHARS", 240, minimum=50),
     query_vision_enabled=_get_bool("QUERY_IMAGE_VISION_ENABLED", True),
     query_image_top_k=_get_int("QUERY_IMAGE_TOP_K", 3, minimum=1),
     query_vision_timeout_seconds=_get_int("QUERY_IMAGE_VISION_TIMEOUT_SECONDS", 45, minimum=5),
