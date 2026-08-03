@@ -1,14 +1,16 @@
 # 导入Python内置模块
 import os
-import json
+import tempfile
+from pathlib import Path
+from urllib.parse import quote, unquote, urlparse
 from datetime import timedelta
 from threading import Lock
 from time import monotonic
-from urllib.parse import quote, unquote, urlparse
-# 导入MinIO官方Python SDK核心类
+
+import json
 from minio import Minio
 from minio.error import S3Error
-# 项目内部配置与日志
+
 from app.conf.minio_config import minio_config
 from app.core.logger import logger
 from app.security.config import load_security_config
@@ -82,15 +84,47 @@ def _initialize_minio_clients():
 
 
 def get_minio_client():
-    """
-    获取全局初始化的MinIO客户端实例
-    :return: 已初始化的Minio对象 / None（初始化失败时）
-    """
+    """获取全局初始化的MinIO客户端实例。"""
     return _initialize_minio_clients()
 
 
 def minio_object_uri(bucket_name: str, object_name: str) -> str:
+    """生成内部使用的MinIO对象URI，避免不同环境直接暴露访问地址。"""
     return f"minio://{bucket_name}/{quote(object_name.lstrip('/'), safe='/')}"
+
+
+def download_minio_object(uri: str, suffix: str = "") -> str:
+    """
+    将MinIO对象下载到临时文件。
+
+    后台视觉增强任务需要把图片转换成Base64发送给视觉模型，因此不能直接依赖本地上传目录。
+    临时文件由调用方在使用完成后删除，避免长期占用容器磁盘。
+    """
+    if not uri.startswith("minio://"):
+        raise ValueError(f"不支持的MinIO对象地址：{uri}")
+
+    client = get_minio_client()
+    if client is None:
+        raise RuntimeError("MinIO客户端初始化失败，无法下载图片")
+
+    parsed = urlparse(uri)
+    bucket_name = parsed.netloc
+    object_name = unquote(parsed.path.lstrip("/"))
+    if not bucket_name or not object_name:
+        raise ValueError(f"非法MinIO对象地址：{uri}")
+
+    suffix = suffix or Path(object_name).suffix
+    fd, temp_path = tempfile.mkstemp(prefix="rag-image-", suffix=suffix)
+    os.close(fd)
+    try:
+        client.fget_object(bucket_name, object_name, temp_path)
+        return temp_path
+    except Exception:
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
+        raise
 
 
 def resolve_object_url(value: str) -> str:

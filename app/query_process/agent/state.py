@@ -1,33 +1,47 @@
+from typing import Any, Dict, List
+
 from typing_extensions import TypedDict
-from typing import List
 
 
-class QueryGraphState(TypedDict):
+class QueryGraphState(TypedDict, total=False):
     """
-    QueryGraphState定义整个查询流程中流转的数据结构。
+    查询工作流共享状态。
+
+    LangGraph各节点只返回自己负责更新的字段，因此使用total=False允许节点返回部分状态，
+    同时保留字段类型提示，避免新增图片推理结果时依赖未声明的动态键。
     """
 
-    session_id: str  # 多轮会话唯一标识
-    tenant_id: str  # 调用方租户标识，用于数据面过滤
-    trace_id: str  # 当前这一轮问答对应的Langfuse Trace ID
-    original_query: str  # 用户原始问题
+    # 会话与调用方信息。
+    session_id: str
+    tenant_id: str
+    trace_id: str
+    original_query: str
+    rewritten_query: str
+    history: list
+    is_stream: bool
 
-    # 检索过程中的中间数据
-    embedding_chunks: list  # 普通向量检索回来的切片
-    hyde_embedding_chunks: list  # HyDE检索回来的切片
-    kg_chunks: list  # 图谱检索回来的切片
-    web_search_docs: list  # 网络搜索回来的文档
+    # 设备或商品识别结果。
+    item_names: List[str]
 
-    # 排序过程中的数据
-    rrf_chunks: list  # RRF融合排序后的切片
-    reranked_docs: list  # 重排序后的最终Top-K文档
+    # 多路检索中间结果。
+    embedding_chunks: list
+    hyde_embedding_chunks: list
+    hyde_doc: str
+    kg_chunks: list
+    web_search_docs: list
 
-    # 生成过程中的数据
-    prompt: str  # 组装好的Prompt
-    answer: str  # 最终生成的答案
+    # 排序结果。
+    rrf_chunks: list
+    reranked_docs: List[Dict[str, Any]]
 
-    # 辅助信息
-    item_names: List[str]  # 提取出的设备或商品名称
-    rewritten_query: str  # 改写后的问题
-    history: list  # 历史对话记录
-    is_stream: bool  # 是否流式输出
+    # 查询阶段图片推理结果。
+    need_visual_reasoning: bool
+    image_reasoning_status: str
+    image_assets: List[Dict[str, Any]]
+    image_analysis_context: str
+    image_reasoning_object_uris: List[str]
+    image_reasoning_error: str
+
+    # 最终生成结果。
+    prompt: str
+    answer: str

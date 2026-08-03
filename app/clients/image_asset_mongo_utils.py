@@ -2,14 +2,13 @@ import os
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from pymongo import ASCENDING, MongoClient
 from dotenv import load_dotenv
+from pymongo import ASCENDING, MongoClient, ReturnDocument
 
 from app.conf.image_processing_config import image_processing_config
 from app.core.logger import logger
 
 
-# 加载环境变量，保证独立运行该工具时也可以正常读取 MongoDB 配置。
 load_dotenv()
 
 
@@ -17,24 +16,32 @@ class ImageAssetMongoTool:
     """
     文档图片资产 MongoDB 管理工具。
 
-    设计目的：
-    1. 图片本身存放 MinIO，MongoDB 只保存图片元数据和处理状态；
-    2. 导入阶段先记录图片资产，不等待视觉模型；
-    3. 后台任务根据 visual_status=pending 异步补充图片理解结果；
-    4. 查询阶段可以通过 document_id、chunk 关联找到需要展示或分析的图片。
+    图片处理采用异步增强模式：
+    1. 导入阶段只保存图片资产，不等待视觉模型返回；
+    2. 后台 Worker 根据状态原子领取图片任务；
+    3. 图片处理完成后更新视觉描述，失败时按配置决定重试或终止；
+    4. 查询阶段可以根据文档、图片编号和对象地址获取图片资产。
+
+    任务状态保存在 MongoDB 中，因此服务重启后可以继续处理，也支持多个 Worker 并行运行。
     """
 
     def __init__(self):
         mongo_url = os.getenv("MONGO_URL")
         db_name = os.getenv("MONGO_DB_NAME") or "equipment_rag"
+        if not mongo_url:
+            raise ValueError("未配置MONGO_URL，无法初始化图片资产存储")
 
         self.client = MongoClient(mongo_url)
         self.db = self.client[db_name]
         self.collection = self.db[image_processing_config.asset_collection]
 
-        # 文档维度查询用于后台扫描待处理图片；图片哈希索引用于避免重复处理相同图片。
+        # 文档与状态索引用于后台任务扫描；image_id唯一索引用于保证导入重试不会产生重复记录。
         self.collection.create_index([("document_id", ASCENDING), ("visual_status", ASCENDING)])
+        self.collection.create_index([("tenant_id", ASCENDING), ("document_id", ASCENDING)])
+        self.collection.create_index([("tenant_id", ASCENDING), ("object_uri", ASCENDING)])
+        self.collection.create_index([("image_id", ASCENDING)], unique=True)
         self.collection.create_index([("content_hash", ASCENDING)], sparse=True)
+        self.collection.create_index([("visual_status", ASCENDING), ("lock_time", ASCENDING)])
 
         logger.info(f"图片资产MongoDB初始化完成，集合={image_processing_config.asset_collection}")
 
@@ -42,58 +49,208 @@ class ImageAssetMongoTool:
         """
         批量保存图片资产。
 
-        使用 upsert 而不是直接 insert，避免任务重试时生成大量重复图片记录。
+        使用 upsert 和 $setOnInsert 保留已经完成的视觉结果，避免文档任务恢复或重复执行时把状态重新覆盖为 pending。
         """
         if not assets:
             return 0
 
-        count = 0
+        inserted_count = 0
         for asset in assets:
-            if not asset.get("image_id"):
+            image_id = str(asset.get("image_id") or "").strip()
+            if not image_id:
+                logger.warning("图片资产缺少image_id，已跳过保存")
                 continue
 
+            document = dict(asset)
+            document.setdefault("visual_status", "pending")
+            document.setdefault("retry_count", 0)
+            document.setdefault("error_message", "")
+            document.setdefault("created_at", datetime.now().timestamp())
+            document.setdefault("updated_at", document["created_at"])
+
             result = self.collection.update_one(
-                {"image_id": asset["image_id"]},
-                {
-                    "$set": asset,
-                    "$setOnInsert": {
-                        "created_at": datetime.now().timestamp(),
-                    },
-                },
+                {"image_id": image_id},
+                {"$setOnInsert": document},
                 upsert=True,
             )
-            if result.upserted_id or result.modified_count:
-                count += 1
+            if result.upserted_id:
+                inserted_count += 1
 
-        return count
+        return inserted_count
 
-    def list_pending_assets(self, limit: int = 30) -> List[Dict]:
+    def claim_pending_assets(self, worker_id: str, limit: int = 10) -> List[Dict]:
         """
-        查询等待视觉增强的图片。
+        原子领取等待视觉增强的图片。
 
-        后台 worker 不直接扫描文件系统，而是依赖该状态表实现可恢复处理。
+        每次通过 find_one_and_update 领取一条记录，只有成功把状态改为 processing 的 Worker 才能得到任务。
+        processing 状态超过租约时间后允许重新领取，用于恢复进程崩溃或容器重启遗留的任务。
         """
-        return list(
-            self.collection.find({"visual_status": "pending"})
-            .sort("created_at", ASCENDING)
-            .limit(limit)
-        )
+        safe_worker_id = str(worker_id or "").strip()
+        if not safe_worker_id:
+            raise ValueError("worker_id不能为空")
 
-    def update_visual_result(self, image_id: str, description: str, status: str = "completed") -> None:
-        """
-        更新图片视觉理解结果。
+        target_count = max(int(limit or 0), 0)
+        claimed_assets: List[Dict] = []
+        for _ in range(target_count):
+            now = datetime.now().timestamp()
+            expire_before = now - image_processing_config.enrichment_lease_seconds
+            eligible_filter = {
+                "retry_count": {"$lte": image_processing_config.caption_max_retries},
+                "$or": [
+                    {"visual_status": "pending"},
+                    {"visual_status": "processing", "lock_time": {"$lt": expire_before}},
+                ],
+            }
+            asset = self.collection.find_one_and_update(
+                eligible_filter,
+                {
+                    "$set": {
+                        "visual_status": "processing",
+                        "worker_id": safe_worker_id,
+                        "lock_time": now,
+                        "updated_at": now,
+                        "error_message": "",
+                    }
+                },
+                sort=[("created_at", ASCENDING)],
+                return_document=ReturnDocument.AFTER,
+            )
+            if not asset:
+                break
+            claimed_assets.append(asset)
 
-        即使视觉模型调用失败，也只更新当前图片状态，不影响整个文档知识库。
+        return claimed_assets
+
+    def complete_visual_result(self, image_id: str, worker_id: str, description: str) -> bool:
         """
-        self.collection.update_one(
-            {"image_id": image_id},
+        完成图片视觉增强任务。
+
+        更新条件同时校验 image_id、worker_id 和 processing 状态，防止租约过期后旧 Worker 覆盖新 Worker 已写入的结果。
+        """
+        now = datetime.now().timestamp()
+        result = self.collection.update_one(
+            {"image_id": image_id, "worker_id": worker_id, "visual_status": "processing"},
             {
                 "$set": {
-                    "visual_description": description or "",
-                    "visual_status": status,
-                    "updated_at": datetime.now().timestamp(),
-                }
+                    "visual_description": str(description or "").strip(),
+                    "visual_status": "completed",
+                    "status_reason": "视觉增强完成",
+                    "error_message": "",
+                    "updated_at": now,
+                    "completed_at": now,
+                },
+                "$unset": {"worker_id": "", "lock_time": ""},
             },
+        )
+        return result.modified_count > 0
+
+    def fail_visual_result(self, image_id: str, worker_id: str, error: str) -> str:
+        """
+        记录图片视觉增强失败结果，并根据最大重试次数决定后续状态。
+
+        retry_count 表示已经失败的次数。未超过配置上限时重新设置为 pending，超过上限后固定为 failed，避免异常图片无限循环调用模型。
+        """
+        asset = self.collection.find_one(
+            {"image_id": image_id, "worker_id": worker_id, "visual_status": "processing"},
+            {"retry_count": 1},
+        )
+        if not asset:
+            logger.warning(f"图片失败状态未更新，任务可能已被其他Worker重新领取：image_id={image_id}")
+            return "ignored"
+
+        retry_count = int(asset.get("retry_count") or 0) + 1
+        next_status = "pending" if retry_count <= image_processing_config.caption_max_retries else "failed"
+        now = datetime.now().timestamp()
+        result = self.collection.update_one(
+            {"image_id": image_id, "worker_id": worker_id, "visual_status": "processing"},
+            {
+                "$set": {
+                    "visual_status": next_status,
+                    "retry_count": retry_count,
+                    "error_message": str(error or "")[:1000],
+                    "status_reason": "等待重试" if next_status == "pending" else "超过最大重试次数",
+                    "updated_at": now,
+                },
+                "$unset": {"worker_id": "", "lock_time": ""},
+            },
+        )
+        return next_status if result.modified_count > 0 else "ignored"
+
+    def get_document_progress(self, document_id: str) -> Dict:
+        """统计某个文档各类图片状态，供接口和前端展示异步增强进度。"""
+        match = {"document_id": document_id}
+        pipeline = [
+            {"$match": match},
+            {"$group": {"_id": "$visual_status", "count": {"$sum": 1}}},
+        ]
+        counts = {str(item.get("_id") or "unknown"): int(item.get("count") or 0) for item in self.collection.aggregate(pipeline)}
+        total = sum(counts.values())
+        finished = counts.get("completed", 0) + counts.get("skipped", 0) + counts.get("failed", 0)
+        return {
+            "document_id": document_id,
+            "total": total,
+            "finished": finished,
+            "pending": counts.get("pending", 0),
+            "processing": counts.get("processing", 0),
+            "completed": counts.get("completed", 0),
+            "skipped": counts.get("skipped", 0),
+            "failed": counts.get("failed", 0),
+            "is_finished": total > 0 and finished == total,
+        }
+
+    def get_assets_by_object_uris(self, tenant_id: str, object_uris: List[str]) -> List[Dict]:
+        """
+        按租户和MinIO对象地址批量查询图片资产，并保持传入地址的原始顺序。
+
+        查询阶段从重排后的Chunk正文中提取图片地址，顺序本身代表文本相关性。
+        MongoDB的$in查询不保证返回顺序，因此这里查询后重新建立映射，避免低相关图片排到高相关图片前面。
+        """
+        ordered_uris = []
+        seen = set()
+        for value in object_uris or []:
+            object_uri = str(value or "").strip()
+            if not object_uri or object_uri in seen:
+                continue
+            seen.add(object_uri)
+            ordered_uris.append(object_uri)
+
+        if not ordered_uris:
+            return []
+
+        projection = {
+            "_id": 0,
+            "image_id": 1,
+            "tenant_id": 1,
+            "document_id": 1,
+            "document_name": 1,
+            "filename": 1,
+            "object_uri": 1,
+            "content_type": 1,
+            "file_size": 1,
+            "page_number": 1,
+            "alt_text": 1,
+            "structured_caption": 1,
+            "base_description": 1,
+            "visual_description": 1,
+            "visual_status": 1,
+            "context_before": 1,
+            "context_after": 1,
+        }
+        documents = list(
+            self.collection.find(
+                {"tenant_id": tenant_id, "object_uri": {"$in": ordered_uris}},
+                projection,
+            )
+        )
+        document_by_uri = {str(item.get("object_uri") or ""): item for item in documents}
+        return [document_by_uri[uri] for uri in ordered_uris if uri in document_by_uri]
+
+    def list_document_assets(self, tenant_id: str, document_id: str, limit: int = 200) -> List[Dict]:
+        """按租户和文档查询图片资产，返回顺序优先按页码排列。"""
+        return list(
+            self.collection.find({"tenant_id": tenant_id, "document_id": document_id}, {"_id": 0})
+            .sort([("page_number", ASCENDING), ("filename", ASCENDING)])
+            .limit(max(int(limit or 0), 0))
         )
 
 
@@ -101,7 +258,7 @@ _image_asset_tool: Optional[ImageAssetMongoTool] = None
 
 
 def get_image_asset_tool() -> ImageAssetMongoTool:
-    """获取图片资产 MongoDB 单例，避免每次处理图片重新创建数据库连接。"""
+    """获取图片资产MongoDB单例，避免重复创建数据库连接。"""
     global _image_asset_tool
     if _image_asset_tool is None:
         _image_asset_tool = ImageAssetMongoTool()
