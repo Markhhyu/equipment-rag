@@ -3,87 +3,48 @@ import time
 from contextlib import contextmanager
 from typing import Any, Iterator, Optional
 
-from app.observability.langfuse_monitor import (
-    LANGFUSE_ENABLED,
-    langfuse
-)
+from app.observability.langfuse_monitor import LANGFUSE_ENABLED, langfuse
 from app.observability.prometheus_metrics import observe_stage
 from app.observability.quality_metrics import analyze_import_state, analyze_query_state, stage_metrics
 
 
-def _get_value(
-        data: Any,
-        key: str,
-        default: Any = None
-) -> Any:
-    """
-    从字典或对象中读取字段。
-
-    Milvus返回结果有时是dict，有时是Hit对象。
-    通过这个方法统一读取，避免业务代码到处判断类型。
-
-    :param data: 字典或普通对象。
-    :param key: 需要读取的字段名。
-    :param default: 字段不存在时返回的默认值。
-    :return: 对应字段值。
-    """
-
-    # 字典使用get读取。
+def _get_value(data: Any, key: str, default: Any = None) -> Any:
+    """从字典或对象中读取字段，兼容Milvus Hit对象和普通字典。"""
     if isinstance(data, dict):
         return data.get(key, default)
-
-    # 普通对象使用getattr读取。
     return getattr(data, key, default)
 
 
 @contextmanager
 def start_rag_observation(
-        *,
-        as_type: str,
-        name: str,
-        input_data: Optional[Any] = None,
-        metadata: Optional[dict] = None,
-        model: Optional[str] = None
+    *,
+    as_type: str,
+    name: str,
+    input_data: Optional[Any] = None,
+    metadata: Optional[dict] = None,
+    model: Optional[str] = None,
 ) -> Iterator[Optional[Any]]:
     """
-    安全创建一个RAG业务Observation。
+    安全创建RAG业务Observation。
 
-    当Langfuse被关闭时，该方法会退化为空上下文，
-    不影响BGE、Milvus、Reranker等正常业务执行。
-
-    :param as_type:
-        Observation类型，例如：
-        embedding、retriever、span、tool。
-    :param name: Observation名称。
-    :param input_data: 本阶段输入数据。
-    :param metadata: 附加业务参数。
-    :param model: 使用的模型名称。
-    :return: 当前Observation；监控关闭时返回None。
+    Langfuse关闭或客户端不可用时退化为空上下文，不影响解析、检索、重排、视觉分析和问答主流程。
     """
-
-    # 监控关闭时，不创建Observation。
     if not LANGFUSE_ENABLED or langfuse is None:
         yield None
         return
 
-    # 创建自定义Observation。
-    # 如果with代码块内部出现异常，Langfuse会自动记录异常状态。
     with langfuse.start_as_current_observation(
-            as_type=as_type,
-            name=name,
-            input=input_data,
-            metadata=metadata,
-            model=model
+        as_type=as_type,
+        name=name,
+        input=input_data,
+        metadata=metadata,
+        model=model,
     ) as observation:
         yield observation
 
 
 def observed_graph_node(kind: str, name: str, node_function):
-    """同时为 Langfuse 和 Prometheus 记录一个 LangGraph 节点。
-
-    业务节点仍然只负责原来的解析、检索或问答逻辑；这里统一处理耗时、成功/失败、
-    轻量结果摘要。这样不会在每个节点里重复编写监控代码，也更不容易漏埋点。
-    """
+    """同时为Langfuse和Prometheus记录一个LangGraph节点的耗时、结果摘要与成功状态。"""
 
     @functools.wraps(node_function)
     def wrapper(state, *args, **kwargs):
@@ -113,152 +74,166 @@ def observed_graph_node(kind: str, name: str, node_function):
     return wrapper
 
 
-def summarize_milvus_hits(
-        hits: list,
-        limit: int = 10
-) -> list:
-    """
-    将Milvus检索结果转换为适合上传到Langfuse的摘要。
-
-    注意：
-    1. 不上传完整向量；
-    2. 不上传完整设备手册正文；
-    3. 只上传Chunk ID、设备名称、排名和分数。
-
-    :param hits: Milvus返回的检索结果。
-    :param limit: 最多记录多少条结果。
-    :return: 精简后的检索结果列表。
-    """
-
+def summarize_milvus_hits(hits: list, limit: int = 10) -> list:
+    """将Milvus检索结果转换为适合上传到Langfuse的轻量摘要。"""
     result = []
-
-    # 只记录指定数量，防止Trace数据量过大。
     for rank, hit in enumerate((hits or [])[:limit], start=1):
-
-        # Milvus的业务字段通常位于entity中。
         entity = _get_value(hit, "entity", {}) or {}
-
-        # distance在当前Milvus代码中代表融合后的相关性分数。
         raw_score = _get_value(hit, "distance", 0.0) or 0.0
-
-        result.append({
-            "rank": rank,
-            "chunk_id": (
-                _get_value(entity, "chunk_id")
-                or _get_value(hit, "id")
-            ),
-            "item_name": _get_value(
-                entity,
-                "item_name",
-                ""
-            ),
-            # 转为Python原生float，避免numpy类型无法JSON序列化。
-            "score": float(raw_score)
-        })
-
+        result.append(
+            {
+                "rank": rank,
+                "chunk_id": _get_value(entity, "chunk_id") or _get_value(hit, "id"),
+                "item_name": _get_value(entity, "item_name", ""),
+                "document_id": _get_value(entity, "document_id", ""),
+                "has_images": bool(_get_value(entity, "has_images", False)),
+                "image_count": len(_get_value(entity, "image_object_uris", []) or []),
+                "score": float(raw_score),
+            }
+        )
     return result
 
 
-def summarize_rerank_docs(
-        docs: list,
-        limit: int = 10
-) -> list:
-    """
-    将BGE Reranker结果转换为监控摘要。
-
-    不记录完整正文，只记录：
-    1. 排名；
-    2. Chunk ID；
-    3. 标题；
-    4. 来源；
-    5. Reranker分数。
-
-    :param docs: 已完成重排的文档。
-    :param limit: 最多记录多少条。
-    :return: 精简后的重排结果。
-    """
-
+def summarize_rerank_docs(docs: list, limit: int = 10) -> list:
+    """将BGE Reranker结果转换为不包含完整正文的监控摘要。"""
     result = []
-
     for rank, doc in enumerate((docs or [])[:limit], start=1):
-        result.append({
-            "rank": rank,
-            "chunk_id": doc.get("chunk_id"),
-            "title": doc.get("title", ""),
-            "source": doc.get("source", ""),
-            "score": float(doc.get("score", 0.0) or 0.0)
-        })
-
+        result.append(
+            {
+                "rank": rank,
+                "chunk_id": doc.get("chunk_id"),
+                "document_id": doc.get("document_id", ""),
+                "title": doc.get("title", ""),
+                "source": doc.get("source", ""),
+                "has_images": bool(doc.get("has_images")),
+                "image_count": len(doc.get("image_object_uris") or []),
+                "score": float(doc.get("score", 0.0) or 0.0),
+            }
+        )
     return result
+
+
+def summarize_image_assets(assets: list, limit: int = 10) -> list:
+    """
+    将图片资产转换为Langfuse轻量摘要。
+
+    不上传图片地址、图片二进制、Base64、完整视觉描述或手册正文，只记录定位、状态和体积等可运营字段。
+    """
+    result = []
+    for rank, asset in enumerate((assets or [])[:limit], start=1):
+        if not isinstance(asset, dict):
+            continue
+        cached_description = (
+            asset.get("visual_description")
+            or asset.get("structured_caption")
+            or asset.get("base_description")
+            or asset.get("alt_text")
+            or ""
+        )
+        result.append(
+            {
+                "rank": rank,
+                "image_id": asset.get("image_id", ""),
+                "document_id": asset.get("document_id", ""),
+                "document_name": asset.get("document_name", ""),
+                "page_number": asset.get("page_number"),
+                "content_type": asset.get("content_type", ""),
+                "file_size": int(asset.get("file_size") or 0),
+                "visual_status": asset.get("visual_status", "unknown"),
+                "has_cached_description": bool(str(cached_description).strip()),
+                "cached_description_length": len(str(cached_description).strip()),
+            }
+        )
+    return result
+
+
+def summarize_image_reasoning(final_state: dict) -> dict:
+    """汇总当前问答的视觉意图、候选图片、视觉状态和上下文使用情况。"""
+    image_assets = final_state.get("image_assets") or []
+    selected_uris = final_state.get("image_reasoning_object_uris") or []
+    image_context = str(final_state.get("image_analysis_context") or "").strip()
+    image_error = str(final_state.get("image_reasoning_error") or "").strip()
+    return {
+        "need_visual_reasoning": bool(final_state.get("need_visual_reasoning")),
+        "status": final_state.get("image_reasoning_status") or "not_required",
+        "selected_image_count": len(selected_uris),
+        "available_asset_count": len(image_assets),
+        "image_context_length": len(image_context),
+        "has_image_context": bool(image_context),
+        "has_error": bool(image_error),
+        "error_type": image_error.split(":", 1)[0][:100] if image_error else "",
+        "assets": summarize_image_assets(image_assets),
+    }
+
+
+def _create_boolean_score(trace_id: str, name: str, value: bool, comment: str) -> None:
+    """创建布尔类型Langfuse Score，统一值和数据类型。"""
+    langfuse.create_score(
+        trace_id=trace_id,
+        name=name,
+        value=1.0 if value else 0.0,
+        data_type="BOOLEAN",
+        comment=comment,
+    )
 
 
 def score_query_result(final_state: dict) -> None:
     """
-    为当前问答Trace增加第一版确定性评分。
+    为当前问答Trace增加确定性评分。
 
-    当前只做不依赖大模型的基础判断：
-    1. retrieval_hit：是否检索到参考文档；
-    2. answer_generated：是否生成了非空答案；
-    3. rerank_top1_raw_score：Top1重排原始分数。
-
-    注意：
-    这些指标不能证明答案一定正确，
-    只是用于快速发现“没有检索结果”或“没有生成答案”等明显异常。
-
-    :param final_state: LangGraph执行结束后的完整状态。
+    指标用于趋势、异常检测和链路运营，不能证明最终答案一定正确，也不能替代人工标注评测集。
     """
-
-    # 监控未启用时，不创建Score。
     if not LANGFUSE_ENABLED or langfuse is None:
         return
 
-    # 获取当前正在执行的Trace ID。
-    # 此方法必须在trace_query上下文内部调用。
     trace_id = langfuse.get_current_trace_id()
-
-    # 当前上下文不存在Trace时直接退出，避免出现孤立Score。
     if not trace_id:
         return
 
-    # 获取最终回答。
-    answer = (final_state.get("answer") or "").strip()
-
-    # 获取最终进入Prompt的重排文档。
+    answer = str(final_state.get("answer") or "").strip()
     reranked_docs = final_state.get("reranked_docs") or []
+    need_visual_reasoning = bool(final_state.get("need_visual_reasoning"))
+    image_status = str(final_state.get("image_reasoning_status") or "not_required")
+    image_context = str(final_state.get("image_analysis_context") or "").strip()
+    selected_images = final_state.get("image_reasoning_object_uris") or []
 
-    # 评分1：是否成功检索到参考文档。
-    langfuse.create_score(
-        trace_id=trace_id,
-        name="retrieval_hit",
-        value=1.0 if reranked_docs else 0.0,
-        data_type="BOOLEAN",
-        comment="重排完成后是否存在可用于回答的参考文档"
-    )
+    _create_boolean_score(trace_id, "retrieval_hit", bool(reranked_docs), "重排后是否存在可用于回答的参考文档")
+    _create_boolean_score(trace_id, "answer_generated", bool(answer), "本轮问答是否成功生成非空答案")
+    _create_boolean_score(trace_id, "visual_question_hit", need_visual_reasoning, "用户问题是否命中图片、界面或空间位置类视觉意图")
+    _create_boolean_score(trace_id, "visual_candidate_hit", bool(selected_images), "视觉问题是否从重排文档中找到相关图片候选")
+    _create_boolean_score(trace_id, "image_context_used", bool(image_context), "最终回答Prompt是否获得图片分析或缓存图片说明上下文")
 
-    # 评分2：是否成功生成非空答案。
-    langfuse.create_score(
-        trace_id=trace_id,
-        name="answer_generated",
-        value=1.0 if answer else 0.0,
-        data_type="BOOLEAN",
-        comment="本轮问答是否成功生成非空答案"
-    )
-
-    # 只有存在重排文档时，才记录Top1分数。
-    if reranked_docs:
-        top1_score = float(
-            reranked_docs[0].get("score", 0.0) or 0.0
+    if need_visual_reasoning:
+        _create_boolean_score(
+            trace_id,
+            "visual_reasoning_success",
+            image_status == "completed",
+            "需要视觉分析时，查询阶段视觉模型是否成功完成",
+        )
+        _create_boolean_score(
+            trace_id,
+            "visual_reasoning_degraded",
+            image_status in {"vision_disabled", "fallback_cached_description", "no_candidate_images"},
+            "需要视觉分析时，是否发生关闭、无候选或缓存描述降级",
         )
 
+    if reranked_docs:
         langfuse.create_score(
             trace_id=trace_id,
             name="rerank_top1_raw_score",
-            value=top1_score,
+            value=float(reranked_docs[0].get("score", 0.0) or 0.0),
             data_type="NUMERIC",
-            comment="BGE Reranker返回的Top1原始相关性分数"
+            comment="BGE Reranker返回的Top1原始相关性分数",
         )
 
-    # 质量代理分只用于趋势和异常检测，不能替代人工标注的黄金评测集。
+    langfuse.create_score(
+        trace_id=trace_id,
+        name="selected_image_count",
+        value=float(len(selected_images)),
+        data_type="NUMERIC",
+        comment="当前问答实际选择并返回的相关图片数量",
+    )
+
     report = analyze_query_state(final_state)
     langfuse.create_score(
         trace_id=trace_id,
@@ -270,11 +245,11 @@ def score_query_result(final_state: dict) -> None:
 
 
 def score_import_result(final_state: dict) -> dict:
-    """计算文件解析/切片/向量/入库质量，并把关键比例写入 Langfuse。"""
-
+    """计算文件解析、切片、向量和入库质量，并把关键比例写入Langfuse。"""
     report = analyze_import_state(final_state)
     if not LANGFUSE_ENABLED or langfuse is None:
         return report
+
     trace_id = langfuse.get_current_trace_id()
     if not trace_id:
         return report
@@ -292,6 +267,6 @@ def score_import_result(final_state: dict) -> dict:
             name=score_name,
             value=float(value),
             data_type="NUMERIC",
-            comment="文件导入流程的确定性质量指标；详细含义见 docs/observability.md",
+            comment="文件导入流程的确定性质量指标；详细含义见docs/observability.md",
         )
     return report
