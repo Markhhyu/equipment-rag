@@ -4,6 +4,7 @@ import base64
 import mimetypes
 import os
 import threading
+import time
 import uuid
 from collections import deque
 from pathlib import Path
@@ -16,6 +17,7 @@ from app.clients.minio_utils import download_minio_object
 from app.conf.image_processing_config import image_processing_config
 from app.core.logger import logger
 from app.lm.lm_utils import get_llm_client
+from app.observability.rag_observability import start_rag_observation, summarize_image_assets
 
 
 # 后台线程列表与停止信号由当前进程统一管理。MongoDB任务租约负责多进程或多容器之间的并发互斥。
@@ -111,7 +113,7 @@ def _wait_for_rate_limit() -> None:
     while not _stop_event.is_set():
         wait_seconds = 0.0
         with _rate_limit_lock:
-            now = __import__("time").monotonic()
+            now = time.monotonic()
             while _request_times and now - _request_times[0] >= window_seconds:
                 _request_times.popleft()
             if len(_request_times) < max_requests:
@@ -127,36 +129,74 @@ def _wait_for_rate_limit() -> None:
 
 def _generate_visual_description(asset: dict, image_path: str) -> str:
     """
-    调用视觉模型生成图片描述。
+    调用视觉模型生成图片描述，并记录独立Langfuse Generation。
 
-    请求超时和内部重试次数使用图片专用配置，避免单张异常图片长时间占用Worker。
+    观测输入只包含图片轻量摘要和Prompt长度，不上传Base64、MinIO地址、完整上下文或完整Prompt。
     """
     image_base64 = _read_image_base64(image_path)
     mime_type = str(asset.get("content_type") or mimetypes.guess_type(image_path)[0] or "image/jpeg")
+    prompt = _build_image_prompt(asset)
     _wait_for_rate_limit()
 
+    model_name = os.getenv("VL_MODEL") or "未配置视觉模型"
     llm = get_llm_client(
         model=os.getenv("VL_MODEL"),
         timeout_seconds=image_processing_config.caption_timeout_seconds,
         max_retries=0,
     )
-    response = llm.invoke(
-        [
-            HumanMessage(
-                content=[
-                    {"type": "text", "text": _build_image_prompt(asset)},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{mime_type};base64,{image_base64}"},
-                    },
+    started = time.perf_counter()
+    with start_rag_observation(
+        as_type="generation",
+        name="image-enrichment-generation",
+        input_data={
+            "image": (summarize_image_assets([asset]) or [{}])[0],
+            "prompt_length": len(prompt),
+        },
+        metadata={
+            "pipeline": "image_enrichment",
+            "timeout_seconds": image_processing_config.caption_timeout_seconds,
+            "max_retries": 0,
+            "rate_limit_per_minute": image_processing_config.caption_requests_per_minute,
+        },
+        model=model_name,
+    ) as generation_observation:
+        try:
+            response = llm.invoke(
+                [
+                    HumanMessage(
+                        content=[
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:{mime_type};base64,{image_base64}"},
+                            },
+                        ]
+                    )
                 ]
             )
-        ]
-    )
-    description = _extract_response_text(getattr(response, "content", ""))
-    if not description:
-        raise ValueError("视觉模型返回了空图片描述")
-    return description[:500]
+            description = _extract_response_text(getattr(response, "content", ""))
+            if not description:
+                raise ValueError("视觉模型返回了空图片描述")
+            description = description[:500]
+            if generation_observation is not None:
+                generation_observation.update(
+                    output={
+                        "status": "completed",
+                        "description_length": len(description),
+                        "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+                    }
+                )
+            return description
+        except Exception as exc:
+            if generation_observation is not None:
+                generation_observation.update(
+                    output={
+                        "status": "failed",
+                        "error_type": type(exc).__name__,
+                        "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+                    }
+                )
+            raise
 
 
 def _process_single_asset(asset: dict, worker_id: str) -> bool:
@@ -205,10 +245,10 @@ def _process_single_asset(asset: dict, worker_id: str) -> bool:
 
 def process_image_enrichment_once(worker_id: str | None = None) -> int:
     """
-    领取并处理一张待增强图片。
+    领取并处理一张待增强图片，并为已领取任务创建Langfuse Span。
 
-    每次只领取一张，避免某个Worker提前锁住多张图片后串行等待，影响其他Worker并发处理。
-    返回本次实际领取的任务数，而不是仅返回成功数；这样失败任务后仍会立即继续扫描队列。
+    无任务轮询不会创建Observation，避免后台空轮询持续产生无价值Trace。
+    返回本次实际领取的任务数，而不是仅返回成功数。
     """
     safe_worker_id = worker_id or f"图片增强任务-{uuid.uuid4().hex[:8]}"
     tool = get_image_asset_tool()
@@ -218,15 +258,43 @@ def process_image_enrichment_once(worker_id: str | None = None) -> int:
 
     asset = assets[0]
     image_id = str(asset.get("image_id") or "")
-    try:
-        _process_single_asset(asset, safe_worker_id)
-    except Exception as exc:
-        next_status = tool.fail_visual_result(image_id, safe_worker_id, str(exc))
-        logger.error(
-            f"图片视觉增强失败：文档={asset.get('document_name')}，文件={asset.get('filename')}，"
-            f"image_id={image_id}，后续状态={next_status}，原因={exc}",
-            exc_info=True,
-        )
+    started = time.perf_counter()
+    with start_rag_observation(
+        as_type="span",
+        name="image-enrichment-task",
+        input_data={"image": (summarize_image_assets([asset]) or [{}])[0]},
+        metadata={
+            "pipeline": "image_enrichment",
+            "retry_count": int(asset.get("retry_count") or 0),
+            "lease_seconds": image_processing_config.enrichment_lease_seconds,
+        },
+    ) as task_observation:
+        try:
+            updated = _process_single_asset(asset, safe_worker_id)
+            status = "completed" if updated else "lease_lost"
+            if task_observation is not None:
+                task_observation.update(
+                    output={
+                        "status": status,
+                        "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+                    }
+                )
+        except Exception as exc:
+            next_status = tool.fail_visual_result(image_id, safe_worker_id, str(exc))
+            if task_observation is not None:
+                task_observation.update(
+                    output={
+                        "status": "failed",
+                        "next_status": next_status,
+                        "error_type": type(exc).__name__,
+                        "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+                    }
+                )
+            logger.error(
+                f"图片视觉增强失败：文档={asset.get('document_name')}，文件={asset.get('filename')}，"
+                f"image_id={image_id}，后续状态={next_status}，原因={exc}",
+                exc_info=True,
+            )
     return 1
 
 
