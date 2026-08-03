@@ -32,6 +32,8 @@ class CaseMetrics:
     forbidden_term_pass: float
     clarification_pass: float
     retrieval_recall: float | None
+    retrieval_precision: float | None
+    retrieval_mrr: float | None
     citation_pass: float
     latency_pass: float | None
 
@@ -44,6 +46,8 @@ class CaseMetrics:
                 self.forbidden_term_pass,
                 self.clarification_pass,
                 self.retrieval_recall,
+                self.retrieval_precision,
+                self.retrieval_mrr,
                 self.citation_pass,
                 self.latency_pass,
             )
@@ -62,11 +66,26 @@ def score_case(case: EvalCase, prediction: Prediction) -> CaseMetrics:
         clarified = infer_clarification(prediction.answer)
 
     retrieval_recall = None
+    retrieval_precision = None
+    retrieval_mrr = None
     if prediction.retrieved_source_ids is not None:
-        # 只有预测结果提供了召回文档 ID 时才计算检索召回率。
+        # 只有API真正返回了召回文档ID时才计算检索指标，绝不使用答案文本伪造召回结果。
         expected = set(case.expected_source_ids)
-        retrieved = set(prediction.retrieved_source_ids)
-        retrieval_recall = _ratio(len(expected & retrieved), len(expected))
+        retrieved_list = prediction.retrieved_source_ids
+        retrieved = set(retrieved_list)
+        matches = len(expected & retrieved)
+        retrieval_recall = _ratio(matches, len(expected))
+        retrieval_precision = _ratio(matches, len(retrieved)) if retrieved else float(not expected)
+
+        # MRR关注“第一条正确来源排在第几位”。正确Chunk越靠前，Reranker越容易构建干净上下文。
+        retrieval_mrr = 0.0
+        if not expected:
+            retrieval_mrr = float(not retrieved_list)
+        else:
+            for rank, source_id in enumerate(retrieved_list, start=1):
+                if source_id in expected:
+                    retrieval_mrr = 1.0 / rank
+                    break
 
     citation_pass = 1.0
     if case.require_citation:
@@ -84,6 +103,8 @@ def score_case(case: EvalCase, prediction: Prediction) -> CaseMetrics:
         forbidden_term_pass=float(forbidden_matches == 0),
         clarification_pass=float(clarified == case.must_clarify),
         retrieval_recall=retrieval_recall,
+        retrieval_precision=retrieval_precision,
+        retrieval_mrr=retrieval_mrr,
         citation_pass=citation_pass,
         latency_pass=latency_pass,
     )

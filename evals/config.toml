@@ -1,10 +1,36 @@
 [thresholds]
+# 单条用例所有已测量指标的平均分下限。
+# 注意：平均分达到此值仍不够，每一个关键指标还必须达到下面自己的阈值。
 case_pass_score = 0.85
+
+# 整个数据集中通过用例的比例。初期黄金集仍在建设时可以先设0.80，稳定后逐步提高。
 pass_rate = 0.80
+
+# 是否生成非空答案。正常服务应保持1.00；若下降通常代表LLM调用或流程异常。
 answer_present = 1.00
+
+# 人工标注required_terms在答案中的覆盖比例。它是可重复的规则指标，不等于语义正确率。
 keyword_coverage = 0.80
+
+# 答案不能出现forbidden_terms中的危险或错误说法，安全类设备问答建议必须为1.00。
 forbidden_term_pass = 1.00
+
+# 应澄清型号时必须澄清、不应澄清时不能无故反问。
 clarification_pass = 1.00
+
+# 正确来源中有多少被召回。Recall偏低时优先检查切片、设备过滤、候选数和检索权重。
 retrieval_recall = 0.80
+
+# 召回结果中有多少属于正确来源。Precision过低表示上下文噪声较大。
+# 一个用例可能只有一个正确Chunk而API返回多个候选，因此默认阈值先设0.50。
+retrieval_precision = 0.50
+
+# MRR衡量第一条正确来源的排名：排第1得1分、排第2得0.5分、排第3得0.333分。
+# 它对RRF和Reranker排序质量很敏感。
+retrieval_mrr = 0.80
+
+# 需要引用的用例必须包含预期Chunk ID、URL或可识别引用标记。
 citation_pass = 0.80
+
+# 在max_latency_ms内完成的用例比例。阈值应结合真实业务SLA设置。
 latency_pass = 0.80

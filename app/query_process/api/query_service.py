@@ -1,4 +1,5 @@
 from pathlib import Path
+import time
 import uuid
 import uvicorn
 from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException, Request
@@ -6,6 +7,8 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from contextlib import asynccontextmanager
 from app.observability.rag_observability import score_query_result
+from app.observability.prometheus_metrics import install_prometheus, observe_feedback, observe_run
+from app.observability.quality_metrics import analyze_query_state
 
 from app.core.logger import logger
 from app.observability.langfuse_monitor import flush_langfuse
@@ -43,6 +46,8 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="query service", description="设备文档Agent查询服务", lifespan=lifespan)# 跨域问题解决
 configure_http_security(app)
+# /metrics供Prometheus抓取。指标不包含问题、答案、Trace ID等敏感或高基数内容。
+install_prometheus(app, "query-api")
 
 # 返回chat.html页面
 @app.get("/chat.html")  # 对外访问地址
@@ -120,6 +125,7 @@ def run_query_graph(
     :param trace_id: 当前这轮问答对应的Langfuse Trace ID。
     """
 
+    run_started = time.perf_counter()
     internal_session_id = scoped_session_id(tenant_id, session_id)
     logger.info(
         f"开始执行问答流程，"
@@ -206,6 +212,7 @@ def run_query_graph(
 
             # 写入自动基础评分。
             score_query_result(final_state)
+            quality_report = analyze_query_state(final_state)
 
             # 更新根Observation最终输出。
             if observation is not None:
@@ -261,6 +268,7 @@ def run_query_graph(
                 "trace_id": trace_id,
                 "answer": final_state.get("answer", ""),
                 "retrieved_source_ids": retrieved_source_ids,
+                "clarified": quality_report["response"]["clarified"],
             },
         )
 
@@ -269,6 +277,7 @@ def run_query_graph(
             f"session_id={session_id}，"
             f"trace_id={trace_id}"
         )
+        observe_run("query", time.perf_counter() - run_started, "completed", quality_report)
         return final_state
 
     except Exception as e:
@@ -300,6 +309,7 @@ def run_query_graph(
                     "trace_id": trace_id
                 }
             )
+        observe_run("query", time.perf_counter() - run_started, "failed")
         return None
 
 
@@ -399,6 +409,7 @@ async def query(
             "trace_id": trace_id,
             "answer": answer,
             "retrieved_source_ids": run_record.result.get("retrieved_source_ids", []),
+            "clarified": run_record.result.get("clarified", False),
             "done_list": []
         }
 
@@ -469,9 +480,10 @@ async def submit_feedback(
 
         # 第二份反馈写入MongoDB，用于页面刷新后恢复按钮状态。
         matched_count = update_message_feedback(request.trace_id, request.value, request.comment or "")
+        observe_feedback(request.value)
 
         if matched_count == 0:
-            logger.warning(f"Langfuse反馈已保存，但MongoDB未找到对应回答，trace_id={request.trace_id}")
+            logger.warning(f"反馈已处理，但MongoDB未找到对应回答，trace_id={request.trace_id}")
 
         logger.info(
             f"用户反馈提交成功，"

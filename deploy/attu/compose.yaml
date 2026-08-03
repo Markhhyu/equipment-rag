@@ -6,7 +6,9 @@ services:
     container_name: equipment-rag-attu
     restart: unless-stopped
     ports:
-      - "127.0.0.1:${ATTU_PORT:-3001}:3000"
+      # Grafana 默认使用 3001，因此 Attu 默认改用 3002，避免一键启动时端口冲突。
+      # 如需修改，只要在根目录 .env 中设置 ATTU_PORT；启动脚本会把该文件传给本 Compose。
+      - "127.0.0.1:${ATTU_PORT:-3002}:3000"
     environment:
       MILVUS_ADDRESS: milvus:19530
       MILVUS_NAME: Equipment RAG

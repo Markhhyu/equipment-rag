@@ -12,6 +12,7 @@ from app.evaluation.models import EvalCase, Prediction
 class QueryApiProvider:
     base_url: str
     timeout_seconds: float = 120.0
+    api_key: str | None = None
 
     def predict(self, case: EvalCase) -> Prediction:
         """调用真实查询 API，把在线回答转换为统一的评测预测结构。"""
@@ -23,6 +24,8 @@ class QueryApiProvider:
                 "session_id": f"eval-{case.case_id}",
                 "is_stream": False,
             },
+            # 评测专用Key只放在HTTP Header，不写入数据集、报告或日志。
+            headers={"X-API-Key": self.api_key} if self.api_key else None,
             timeout=self.timeout_seconds,
         )
         latency_ms = (time.perf_counter() - started) * 1000

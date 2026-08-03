@@ -43,3 +43,12 @@ Each JSONL case supports:
 
 Use synthetic or licensed test content only. Do not commit customer documents,
 production traces, personal data, or credentials.
+
+Retrieval evaluation reports three complementary metrics:
+
+- `retrieval_recall`: how many expected sources were retrieved;
+- `retrieval_precision`: how much of the retrieved list is relevant;
+- `retrieval_mrr`: how early the first expected source appears.
+
+When API authentication is enabled, pass a dedicated evaluation key with
+`--api-key`. Never commit that key or place it in a dataset/report.

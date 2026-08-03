@@ -1,3 +1,5 @@
+import functools
+import time
 from contextlib import contextmanager
 from typing import Any, Iterator, Optional
 
@@ -5,6 +7,8 @@ from app.observability.langfuse_monitor import (
     LANGFUSE_ENABLED,
     langfuse
 )
+from app.observability.prometheus_metrics import observe_stage
+from app.observability.quality_metrics import analyze_import_state, analyze_query_state, stage_metrics
 
 
 def _get_value(
@@ -72,6 +76,41 @@ def start_rag_observation(
             model=model
     ) as observation:
         yield observation
+
+
+def observed_graph_node(kind: str, name: str, node_function):
+    """同时为 Langfuse 和 Prometheus 记录一个 LangGraph 节点。
+
+    业务节点仍然只负责原来的解析、检索或问答逻辑；这里统一处理耗时、成功/失败、
+    轻量结果摘要。这样不会在每个节点里重复编写监控代码，也更不容易漏埋点。
+    """
+
+    @functools.wraps(node_function)
+    def wrapper(state, *args, **kwargs):
+        started = time.perf_counter()
+        try:
+            with start_rag_observation(
+                as_type="span",
+                name=name,
+                input_data={
+                    "task_id": state.get("task_id"),
+                    "trace_id": state.get("trace_id"),
+                },
+                metadata={"pipeline": kind, "node": name},
+            ) as observation:
+                result = node_function(state, *args, **kwargs)
+                merged_state = dict(state)
+                if isinstance(result, dict):
+                    merged_state.update(result)
+                if observation is not None:
+                    observation.update(output=stage_metrics(kind, name, merged_state))
+            observe_stage(kind, name, time.perf_counter() - started, "completed")
+            return result
+        except Exception:
+            observe_stage(kind, name, time.perf_counter() - started, "failed")
+            raise
+
+    return wrapper
 
 
 def summarize_milvus_hits(
@@ -218,3 +257,41 @@ def score_query_result(final_state: dict) -> None:
             data_type="NUMERIC",
             comment="BGE Reranker返回的Top1原始相关性分数"
         )
+
+    # 质量代理分只用于趋势和异常检测，不能替代人工标注的黄金评测集。
+    report = analyze_query_state(final_state)
+    langfuse.create_score(
+        trace_id=trace_id,
+        name="query_quality_proxy",
+        value=float(report["quality_proxy_score"]),
+        data_type="NUMERIC",
+        comment="由召回、引用和答案是否生成等确定性信号组成的代理分数",
+    )
+
+
+def score_import_result(final_state: dict) -> dict:
+    """计算文件解析/切片/向量/入库质量，并把关键比例写入 Langfuse。"""
+
+    report = analyze_import_state(final_state)
+    if not LANGFUSE_ENABLED or langfuse is None:
+        return report
+    trace_id = langfuse.get_current_trace_id()
+    if not trace_id:
+        return report
+
+    scores = {
+        "import_quality_proxy": report["quality_proxy_score"],
+        "chunk_healthy_ratio": report["chunks"]["healthy_length_ratio"],
+        "embedding_success_ratio": report["embeddings"]["success_ratio"],
+        "milvus_storage_ratio": report["storage"]["stored_ratio"],
+        "item_name_coverage_ratio": report["entity"]["coverage_ratio"],
+    }
+    for score_name, value in scores.items():
+        langfuse.create_score(
+            trace_id=trace_id,
+            name=score_name,
+            value=float(value),
+            data_type="NUMERIC",
+            comment="文件导入流程的确定性质量指标；详细含义见 docs/observability.md",
+        )
+    return report

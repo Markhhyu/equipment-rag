@@ -233,10 +233,14 @@ def update_message_item_names(ids: List[str], item_names: List[str]) -> int:
 
 def _to_serializable(value):
     """将MongoDB/BSON类型转换为可被LangGraph Checkpoint序列化的基础类型。"""
-    if isinstance(value, ObjectId): return str(value)
-    if isinstance(value, datetime): return value.isoformat()
-    if isinstance(value, dict): return {key: _to_serializable(item) for key, item in value.items()}
-    if isinstance(value, list): return [_to_serializable(item) for item in value]
+    if isinstance(value, ObjectId):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {key: _to_serializable(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_to_serializable(item) for item in value]
     return value
 
 def get_recent_messages(session_id: str, limit: int = 10) -> List[Dict[str, Any]]:

@@ -22,6 +22,8 @@ dependencies = [
     "openai-agents>=0.19,<1",
     "pymilvus[model]>=2.6.17,<2.7",
     "pymongo>=4.16,<4.17",
+    # prometheus-client只负责暴露数值指标，供Prometheus抓取和Grafana展示。
+    "prometheus-client>=0.23,<0.24",
     "python-dotenv>=1.2.2,<2",
     "python-multipart>=0.0.32,<0.1",
     "regex>=2026.7.19",

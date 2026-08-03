@@ -2,6 +2,7 @@ import sys
 from typing import List, Dict, Any
 from app.utils.task_utils import add_running_task, add_done_task
 from app.core.logger import logger
+from app.conf.rag_tuning_config import rag_tuning_config
 
 
 # RRF节点
@@ -168,15 +169,19 @@ def node_rrf(state):
         logger.debug(f"HyDE源 chunk_ids (前5个): {[c.get('chunk_id') for c in hyde_embedding_chunks[:5]]}")
 
     # 第二步：为不同来源设置权重
-    # 当前策略：两路召回权重相等，均为 1.0
+    # 默认两路权重相等；可通过.env分别调整，并使用黄金评测验证是否真的提升。
     source_weights = [
-        (embedding_chunks, 1.0),
-        (hyde_embedding_chunks, 1.0)
+        (embedding_chunks, rag_tuning_config.rrf_embedding_weight),
+        (hyde_embedding_chunks, rag_tuning_config.rrf_hyde_weight)
     ]
 
     # 第三步：应用带权重的RRF计算最终得分
-    # k=60 是 RRF 算法的经典常数，max_results=10 限制最终召回数量
-    rrf_res = reciprocal_rank_fusion(source_weights, k=60, max_results=10)
+    # 默认k=60、最多10条；实际值统一从RAG调优配置读取。
+    rrf_res = reciprocal_rank_fusion(
+        source_weights,
+        k=rag_tuning_config.rrf_k,
+        max_results=rag_tuning_config.rrf_max_results,
+    )
 
     # 第四步：解包结果，提取文档和分数
     rrf_chunks = [doc for doc, score in rrf_res]

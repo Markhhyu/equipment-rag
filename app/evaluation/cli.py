@@ -24,6 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
     api = subparsers.add_parser("api", help="Call a running query API and evaluate its answers.")
     api.add_argument("--base-url", default="http://127.0.0.1:8001")
     api.add_argument("--timeout-seconds", type=float, default=120.0)
+    api.add_argument("--api-key", help="查询API启用鉴权时使用；不要把真实Key写进脚本或仓库。")
 
     for command in (replay, api):
         command.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
@@ -42,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.mode == "replay":
         predictions = load_predictions(args.predictions)
     else:
-        provider = QueryApiProvider(args.base_url, timeout_seconds=args.timeout_seconds)
+        provider = QueryApiProvider(args.base_url, timeout_seconds=args.timeout_seconds, api_key=args.api_key)
         predictions = [provider.predict(case) for case in cases]
 
     report = evaluate(cases, predictions, thresholds)

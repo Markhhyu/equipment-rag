@@ -10,21 +10,25 @@ from app.query_process.agent.nodes.node_rrf import node_rrf
 from app.query_process.agent.nodes.node_search_embedding import node_search_embedding
 from app.query_process.agent.nodes.node_search_embedding_hyde import node_search_embedding_hyde
 from app.query_process.agent.nodes.node_web_search_mcp import node_web_search_mcp
+from app.observability.rag_observability import observed_graph_node
 
 # 初始化状态图
 builder = StateGraph(QueryGraphState)
 
 # 注册所有节点
-builder.add_node("node_item_name_confirm", node_item_name_confirm)  # 确认商品
+builder.add_node("node_item_name_confirm", observed_graph_node("query", "node_item_name_confirm", node_item_name_confirm))
 builder.add_node("node_multi_search", lambda x: x)  # 虚拟节点：多路搜索分叉点
-builder.add_node("node_search_embedding", node_search_embedding)  # 向量搜索
-builder.add_node("node_search_embedding_hyde", node_search_embedding_hyde)
-builder.add_node("node_query_kg", node_query_kg)
-builder.add_node("node_web_search_mcp", node_web_search_mcp)
+builder.add_node("node_search_embedding", observed_graph_node("query", "node_search_embedding", node_search_embedding))
+builder.add_node(
+    "node_search_embedding_hyde",
+    observed_graph_node("query", "node_search_embedding_hyde", node_search_embedding_hyde),
+)
+builder.add_node("node_query_kg", observed_graph_node("query", "node_query_kg", node_query_kg))
+builder.add_node("node_web_search_mcp", observed_graph_node("query", "node_web_search_mcp", node_web_search_mcp))
 builder.add_node("node_join", lambda x: {})  # 虚拟节点：多路搜索合并点
-builder.add_node("node_rrf", node_rrf)  # 排序
-builder.add_node("node_rerank", node_rerank)  # 重排
-builder.add_node("node_answer_output", node_answer_output)  # 生成
+builder.add_node("node_rrf", observed_graph_node("query", "node_rrf", node_rrf))
+builder.add_node("node_rerank", observed_graph_node("query", "node_rerank", node_rerank))
+builder.add_node("node_answer_output", observed_graph_node("query", "node_answer_output", node_answer_output))
 
 # 虚拟节点的作用：作为流程的「分叉 / 合并中转站」，解决多分支流程的组织问题，本身无业务逻辑；
 # lambda x:x 含义：接收 state 并原样返回，是最轻便的 “无逻辑传递” 方式；

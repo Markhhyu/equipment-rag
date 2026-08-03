@@ -6,18 +6,19 @@ from app.observability.rag_observability import (
     summarize_rerank_docs
 )
 import sys
+from app.conf.rag_tuning_config import rag_tuning_config
 
 # -----------------------------
 # Rerank / TopK 全局常量（不从 state 读取）
 # -----------------------------
-# 动态 TopK 硬上限：最多取前 N 条（<=10）
-RERANK_MAX_TOPK: int = 10
-# 最小 TopK：至少保留前 N 条（>=1，且 <= RERANK_MAX_TOPK）
-RERANK_MIN_TOPK: int = 1
+# 动态TopK硬上限：默认10，可通过RAG_RERANK_MAX_TOPK调整。
+RERANK_MAX_TOPK: int = rag_tuning_config.rerank_max_topk
+# 最小TopK：至少保留前N条，配置加载时会保证它不大于最大TopK。
+RERANK_MIN_TOPK: int = rag_tuning_config.rerank_min_topk
 # 断崖阈值（相对） 分比例
-RERANK_GAP_RATIO: float = 0.25
+RERANK_GAP_RATIO: float = rag_tuning_config.rerank_gap_ratio
 # 断崖阈值（绝对） 分值
-RERANK_GAP_ABS: float = 0.5
+RERANK_GAP_ABS: float = rag_tuning_config.rerank_gap_abs
 
 # Rerank节点（工作流入口）
 def step_1_merge_docs(state):
