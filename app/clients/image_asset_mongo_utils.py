@@ -20,7 +20,7 @@ class ImageAssetMongoTool:
     1. 导入阶段只保存图片资产，不等待视觉模型返回；
     2. 后台 Worker 根据状态原子领取图片任务；
     3. 图片处理完成后更新视觉描述，失败时按配置决定重试或终止；
-    4. 查询阶段可以根据文档、图片编号和处理状态获取图片资产。
+    4. 查询阶段可以根据文档、图片编号和对象地址获取图片资产。
 
     任务状态保存在 MongoDB 中，因此服务重启后可以继续处理，也支持多个 Worker 并行运行。
     """
@@ -38,6 +38,7 @@ class ImageAssetMongoTool:
         # 文档与状态索引用于后台任务扫描；image_id唯一索引用于保证导入重试不会产生重复记录。
         self.collection.create_index([("document_id", ASCENDING), ("visual_status", ASCENDING)])
         self.collection.create_index([("tenant_id", ASCENDING), ("document_id", ASCENDING)])
+        self.collection.create_index([("tenant_id", ASCENDING), ("object_uri", ASCENDING)])
         self.collection.create_index([("image_id", ASCENDING)], unique=True)
         self.collection.create_index([("content_hash", ASCENDING)], sparse=True)
         self.collection.create_index([("visual_status", ASCENDING), ("lock_time", ASCENDING)])
@@ -197,10 +198,57 @@ class ImageAssetMongoTool:
             "is_finished": total > 0 and finished == total,
         }
 
+    def get_assets_by_object_uris(self, tenant_id: str, object_uris: List[str]) -> List[Dict]:
+        """
+        按租户和MinIO对象地址批量查询图片资产，并保持传入地址的原始顺序。
+
+        查询阶段从重排后的Chunk正文中提取图片地址，顺序本身代表文本相关性。
+        MongoDB的$in查询不保证返回顺序，因此这里查询后重新建立映射，避免低相关图片排到高相关图片前面。
+        """
+        ordered_uris = []
+        seen = set()
+        for value in object_uris or []:
+            object_uri = str(value or "").strip()
+            if not object_uri or object_uri in seen:
+                continue
+            seen.add(object_uri)
+            ordered_uris.append(object_uri)
+
+        if not ordered_uris:
+            return []
+
+        projection = {
+            "_id": 0,
+            "image_id": 1,
+            "tenant_id": 1,
+            "document_id": 1,
+            "document_name": 1,
+            "filename": 1,
+            "object_uri": 1,
+            "content_type": 1,
+            "file_size": 1,
+            "page_number": 1,
+            "alt_text": 1,
+            "structured_caption": 1,
+            "base_description": 1,
+            "visual_description": 1,
+            "visual_status": 1,
+            "context_before": 1,
+            "context_after": 1,
+        }
+        documents = list(
+            self.collection.find(
+                {"tenant_id": tenant_id, "object_uri": {"$in": ordered_uris}},
+                projection,
+            )
+        )
+        document_by_uri = {str(item.get("object_uri") or ""): item for item in documents}
+        return [document_by_uri[uri] for uri in ordered_uris if uri in document_by_uri]
+
     def list_document_assets(self, tenant_id: str, document_id: str, limit: int = 200) -> List[Dict]:
         """按租户和文档查询图片资产，返回顺序优先按页码排列。"""
         return list(
-            self.collection.find({"tenant_id": tenant_id, "document_id": document_id})
+            self.collection.find({"tenant_id": tenant_id, "document_id": document_id}, {"_id": 0})
             .sort([("page_number", ASCENDING), ("filename", ASCENDING)])
             .limit(max(int(limit or 0), 0))
         )
