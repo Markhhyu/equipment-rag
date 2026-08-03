@@ -1,406 +1,267 @@
-from app.utils.task_utils import *
-from app.lm.reranker_utils import get_reranker_model
-from app.core.logger import logger
-from app.observability.rag_observability import (
-    start_rag_observation,
-    summarize_rerank_docs
-)
 import sys
-from app.conf.rag_tuning_config import rag_tuning_config
+from typing import Any, Dict, List
 
-# -----------------------------
-# Rerank / TopK 全局常量（不从 state 读取）
-# -----------------------------
-# 动态TopK硬上限：默认10，可通过RAG_RERANK_MAX_TOPK调整。
+from app.conf.rag_tuning_config import rag_tuning_config
+from app.core.logger import logger
+from app.lm.reranker_utils import get_reranker_model
+from app.observability.rag_observability import start_rag_observation, summarize_rerank_docs
+from app.utils.task_utils import add_done_task, add_running_task
+
+
 RERANK_MAX_TOPK: int = rag_tuning_config.rerank_max_topk
-# 最小TopK：至少保留前N条，配置加载时会保证它不大于最大TopK。
 RERANK_MIN_TOPK: int = rag_tuning_config.rerank_min_topk
-# 断崖阈值（相对） 分比例
 RERANK_GAP_RATIO: float = rag_tuning_config.rerank_gap_ratio
-# 断崖阈值（绝对） 分值
 RERANK_GAP_ABS: float = rag_tuning_config.rerank_gap_abs
 
-# Rerank节点（工作流入口）
-def step_1_merge_docs(state):
+# 本地知识库检索结果在进入Reranker后必须继续保留这些字段。
+# 图片推理节点依赖document_id和image_object_uris定位MongoDB图片资产，不能只保留正文和分数。
+LOCAL_METADATA_FIELDS = (
+    "document_id",
+    "file_title",
+    "item_name",
+    "parent_title",
+    "part",
+    "has_images",
+    "image_ids",
+    "image_object_uris",
+    "image_page_numbers",
+)
+
+
+def _normalize_list(value: Any) -> List[Any]:
+    """把Milvus动态字段统一转换为列表，避免单值、元组或空值导致后续图片选择逻辑分支过多。"""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, (tuple, set)):
+        return list(value)
+    return [value]
+
+
+def _copy_local_metadata(entity: Dict[str, Any]) -> Dict[str, Any]:
+    """从Milvus实体复制文档和图片关联元数据，并对列表字段做标准化。"""
+    metadata = {field: entity.get(field) for field in LOCAL_METADATA_FIELDS}
+    metadata["image_ids"] = [str(value) for value in _normalize_list(metadata.get("image_ids")) if str(value).strip()]
+    metadata["image_object_uris"] = [
+        str(value)
+        for value in _normalize_list(metadata.get("image_object_uris"))
+        if str(value).strip()
+    ]
+    metadata["image_page_numbers"] = [
+        int(value)
+        for value in _normalize_list(metadata.get("image_page_numbers"))
+        if isinstance(value, int) or str(value).isdigit()
+    ]
+    metadata["has_images"] = bool(metadata["image_object_uris"] or metadata["image_ids"] or metadata.get("has_images"))
+    return metadata
+
+
+def step_1_merge_docs(state) -> List[Dict[str, Any]]:
     """
-    阶段一：文档合并与标准化
-    
-    目标：将多路召回（本地知识库 + 联网搜索）的异构数据，统一合并为 Reranker 模型可处理的标准格式。
-    
-    输入来源：
-    1. rrf_chunks (List[Dict]): 本地知识库检索结果（经 RRF 融合排序）。
-       - 结构：包含 Milvus entity 信息的复杂字典或对象。
-       - 关键字段：chunk_id, content, title/item_name。
-    2. web_search_docs (List[Dict]): 联网搜索结果（经 MCP 搜索返回）。
-       - 结构：包含搜索摘要的扁平字典。
-       - 关键字段：snippet, title, url。
-       
-    输出结果 (List[Dict]):
-    - 标准化文档列表，每项包含：
-      - text: 用于重排序的核心文本（content 或 snippet）
-      - title: 标题（用于增强语义或展示）
-      - doc_id/chunk_id: 唯一标识（本地文档有，联网文档为 None）
-      - url: 来源链接（本地为空，联网文档有）
-      - source: 来源标记 ("local" 或 "web")
+    合并RRF本地结果和联网结果，并转换为Reranker统一输入结构。
+
+    本地结果完整保留文档编号和图片关联字段；联网结果没有本地图片资产，相关字段使用安全空值。
     """
-    
-    # 1. 提取输入源
     rrf_docs = state.get("rrf_chunks") or []
     web_docs = state.get("web_search_docs") or []
-    
-    logger.info(f"Step 1: 开始合并文档 - 本地RRF源: {len(rrf_docs)}条, 联网Web源: {len(web_docs)}条")
-    doc_items = []
-    # ---------------------------------------------------------
-    # 2. 处理本地知识库文档 (rrf_chunks)
-    # ---------------------------------------------------------
-    for i, doc in enumerate(rrf_docs):
-        # 简化：直接使用 dict(doc) 转换，如果 doc 本身是 dict 则无损，如果是对象则尝试转换
-        # 由于上游 RRF 节点已经做了 _as_entity_list 处理，这里 doc 极大概率已经是纯字典
-        # 因此可以移除繁琐的 try-except 和 entity 嵌套判断，直接取值
-        
-        # 兼容性处理：优先取 'entity' 字段（防守式编程），若无则视为 doc 本身即 entity
-        # 注意：这里的 doc 应当已经是字典（由上游 _as_entity_list 保证）
-        entity = doc.get("entity") if isinstance(doc, dict) and "entity" in doc else doc
-        
-        # 提取核心文本 (content)，这是重排序的依据
-        # 如果不是字典或无 content，则跳过
+    logger.info(f"开始合并重排候选文档：本地结果={len(rrf_docs)}，联网结果={len(web_docs)}")
+
+    doc_items: List[Dict[str, Any]] = []
+    for index, doc in enumerate(rrf_docs):
+        entity = doc.get("entity") if isinstance(doc, dict) and isinstance(doc.get("entity"), dict) else doc
         if not isinstance(entity, dict):
-            logger.warning(f"本地文档格式异常 (index={i}): {type(entity)}")
+            logger.warning(f"本地检索结果格式异常，已跳过：index={index}，type={type(entity)}")
             continue
-            
-        content = entity.get("content")
+
+        content = str(entity.get("content") or "").strip()
         if not content:
-            # 仅在 debug 模式记录，避免生产环境日志刷屏
-            logger.debug(f"跳过无内容文档 (index={i}, keys={list(entity.keys())})")
+            logger.debug(f"本地检索结果缺少正文，已跳过：index={index}")
             continue
 
-        # 提取元数据 (使用 .get 链式回退，简洁明了)
-        doc_id = entity.get("chunk_id") or entity.get("id")
-        title = entity.get("title") or entity.get("item_name") or ""
-
-        # 组装标准化对象
-        doc_items.append({
+        chunk_id = entity.get("chunk_id") or entity.get("id")
+        item = {
             "text": content,
-            "doc_id": doc_id,
-            "chunk_id": doc_id,  # 兼容旧逻辑保留字段
-            "title": title,
+            "doc_id": chunk_id,
+            "chunk_id": chunk_id,
+            "title": str(entity.get("title") or entity.get("parent_title") or entity.get("item_name") or ""),
             "url": "",
             "source": "local",
-        })
+        }
+        item.update(_copy_local_metadata(entity))
+        doc_items.append(item)
 
-    # ---------------------------------------------------------
-    # 3. 处理联网搜索文档 (web_search_docs)
-    # ---------------------------------------------------------
-    for i, doc in enumerate(web_docs):
-        # 兼容不同字段名：优先取 snippet (摘要)，其次 content
-        text = (doc.get("snippet") or doc.get("content") or "").strip()
-        url = (doc.get("url") or "").strip()
-        title = (doc.get("title") or "").strip()
-        
-        if not text:
-            logger.debug(f"跳过无内容联网结果 (index={i})")
+    for index, doc in enumerate(web_docs):
+        if not isinstance(doc, dict):
+            logger.warning(f"联网检索结果格式异常，已跳过：index={index}，type={type(doc)}")
             continue
-            
-        doc_items.append({
-            "text": text,
-            "doc_id": None, # 联网结果无固定 ID
-            "chunk_id": None,
-            "title": title,
-            "url": url,
-            "source": "web",
-        })
 
-    logger.info(f"Step 1: 文档合并完成，共输出 {len(doc_items)} 条标准化文档")
+        text = str(doc.get("snippet") or doc.get("content") or "").strip()
+        if not text:
+            continue
+
+        doc_items.append(
+            {
+                "text": text,
+                "doc_id": None,
+                "chunk_id": None,
+                "title": str(doc.get("title") or "").strip(),
+                "url": str(doc.get("url") or "").strip(),
+                "source": "web",
+                "document_id": "",
+                "file_title": "",
+                "item_name": "",
+                "parent_title": "",
+                "part": None,
+                "has_images": False,
+                "image_ids": [],
+                "image_object_uris": [],
+                "image_page_numbers": [],
+            }
+        )
+
+    logger.info(
+        f"重排候选文档合并完成，总数={len(doc_items)}，"
+        f"含图片本地文档={sum(1 for item in doc_items if item.get('source') == 'local' and item.get('has_images'))}"
+    )
     return doc_items
 
 
-def step_2_rerank_docs(state, doc_items):
-    """
-    阶段二：对文档进行重排序
-    - 输入 doc_items：[{ text,doc_id}, ...]（由第一阶段产出）
-    - 输出：在 state 中写入 reranked_docs（结构化列表）
-    """
-    question = state.get("rewritten_query") or state.get("original_query") or ""
+def _build_scored_document(item: Dict[str, Any], score: float) -> Dict[str, Any]:
+    """复制完整候选文档并写入重排分数，避免重新组装对象时丢失图片字段。"""
+    scored_document = dict(item)
+    scored_document["score"] = float(score)
+    return scored_document
 
-    # 如果没有文档或问题，直接返回
+
+def step_2_rerank_docs(state, doc_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    使用BGE Reranker对候选文档重新打分。
+
+    正常路径和异常降级路径都复制完整文档对象，因此图片关联元数据不会因为Reranker异常而丢失。
+    """
+    question = str(state.get("rewritten_query") or state.get("original_query") or "").strip()
     if not doc_items or not question:
-        logger.warning("Step 2: 跳过重排序 (无文档或无问题)")
+        logger.warning("候选文档或问题为空，跳过重排序")
         return []
 
-    logger.info(f"Step 2: 开始重排序 (Rerank), 待排序文档数: {len(doc_items)}")
-    
-    # 初始化重排序模型（这里以使用 BGE 重排序模型为例）
-    texts = [x["text"] for x in doc_items]
+    texts = [str(item.get("text") or "") for item in doc_items]
+    logger.info(f"开始执行BGE Reranker，候选文档数={len(doc_items)}")
+
     try:
         reranker = get_reranker_model()
-
-        # 构建查询-文档对（必须是 str）
-        """
-           格式：列表，每个元素是二元元组 / 列表，严格遵循 (query, passage) 顺序（即你的「问题、答案」）：
-             第 1 个元素（query）：用户的问题 / 检索词（如 “什么是 RRF 算法？”）；
-             第 2 个元素（passage）：候选答案 / 待匹配文档（如你之前 RRF 融合后的文档内容）；
-             支持单组匹配和批量匹配：
-             # 单组匹配：1个问题+1个候选答案
-             sentence_pairs = [("什么是RRF算法？", "RRF是倒数排名融合算法，用于多来源排序结果融合")]
-             # 批量匹配：1个问题+多个候选答案（重排序核心场景，推荐）
-             sentence_pairs = [
-                   ("什么是RRF算法？", "RRF是倒数排名融合算法，用于多来源排序结果融合"),
-                   ("什么是RRF算法？", "FP16是半精度推理，能降低模型显存占用"),
-                   ("什么是RRF算法？", "FlagReranker是BGE重排序模型的封装类")
-             ]
-              注意：顺序不可颠倒（必须是「问题在前，答案在后」），模型对输入顺序有严格要求，颠倒会导致打分结果失真。
-           2. 输出结果：scores 分数含义与格式
-           格式：列表，元素为浮点数，列表长度与 sentence_pairs 完全一致，一一对应（第 n 个分数对应第 n 个 (问题，答案) 元组的相关性）；
-           分数含义：数值越高，代表「问题」与「答案」的语义匹配度 / 相关性越强（BGE 重排序模型的分数无固定取值范围，核心看相对大小，用于排序即可）；
-           核心用途：将分数与候选答案绑定，按分数降序排列，即可得到「与问题最相关→最不相关」的答案排序，实现重排序。
-        """
-        # 格式：列表，每个元素是二元元组 / 列表，严格遵循 (query, passage) 顺序
-        sentence_pairs = [[question, t] for t in texts]
-        # 计算相关性得分
-        logger.info("Step 2: 正在计算相关性得分...")
+        sentence_pairs = [[question, text] for text in texts]
         scores = reranker.compute_score(sentence_pairs)
-        # 将得分与文档配对并排序（按 score 降序）
-        scored_docs = []
-        for item, text, score in zip(doc_items, texts, scores):
-            # 保留两位小数便于日志查看
-            score_val = float(score)
-            scored_docs.append(
-                {
-                    "text": text,
-                    "score": score_val,
-                    "source": item.get("source") or "",
-                    "chunk_id": item.get("chunk_id"),
-                    "doc_id": item.get("doc_id"),
-                    "url": item.get("url") or "",
-                    "title": item.get("title") or "",
-                }
-            )
-        # 按分数降序排序
-        scored_docs.sort(key=lambda x: x["score"], reverse=True)
+        if not isinstance(scores, (list, tuple)):
+            scores = [scores]
+        if len(scores) != len(doc_items):
+            raise ValueError(f"Reranker返回分数数量不一致：文档={len(doc_items)}，分数={len(scores)}")
+
+        scored_docs = [_build_scored_document(item, float(score)) for item, score in zip(doc_items, scores)]
+        scored_docs.sort(key=lambda item: float(item.get("score") or 0.0), reverse=True)
         return scored_docs
-    except Exception as e:
-        logger.error(f"Step 2: 重排序过程发生异常: {e}", exc_info=True)
-        # 出错时降级：返回原始文档顺序，分数置为 0 或 None
-        # 避免整个流程中断
-        fallback_docs = [
-            {
-                "text": x.get("text"),
-                "score": 0.0, # 降级分数
-                "source": x.get("source") or "",
-                "chunk_id": x.get("chunk_id"),
-                "doc_id": x.get("doc_id"),
-                "url": x.get("url") or "",
-                "title": x.get("title") or "",
-            }
-            for x in doc_items
+    except Exception as exc:
+        logger.error(f"BGE Reranker执行失败，使用原召回顺序继续问答：{exc}", exc_info=True)
+        # 降级分数按原始顺序递减，避免全部为0时触发无意义的分数断崖计算。
+        total = len(doc_items)
+        return [
+            _build_scored_document(item, float(total - index) / max(total, 1))
+            for index, item in enumerate(doc_items)
         ]
-        # 在这里我们不直接修改 state，而是返回结果让主流程处理
-        # 但为了兼容原有逻辑（虽然函数签名是返回 scored_docs），我们记录异常并抛出或返回降级结果
-        # 这里选择返回降级结果，保证流程继续
-        return fallback_docs
 
-def step_3_topk(scored_docs):
-    """
-    阶段三：动态 TopK（最多 10）
-    基于 scored_docs（已按 score 降序排序）进行智能截断，
-    核心逻辑：结合固定上下限+断崖阈值判断，避免机械取前N条，保留语义相关的连续文档集合
-    :param scored_docs: 列表，元素为带score的文档字典，已按score降序排列，格式如[{"doc": 文档对象, "score": 相关性分数}, ...]
-    :return: 列表，动态截断后的TopK文档列表，数量≤10
-    """
-    # 硬上限：最多取前10条，取全局常量与实际文档数的较小值（避免索引越界）
-    # 注：max_topk从全局常量读取，不依赖外部状态，保证逻辑一致性
+
+def step_3_topk(scored_docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """根据配置上限和相邻分数断崖动态截取TopK，同时保持文档完整元数据。"""
+    if not scored_docs:
+        return []
+
     max_topk = min(RERANK_MAX_TOPK, len(scored_docs))
-    min_topk = RERANK_MIN_TOPK  # 硬下限：至少保留的文档数量（全局常量配置）
-    gap_ratio = RERANK_GAP_RATIO  # 相对断崖阈值：分数下降的相对比例阈值（全局常量配置）
-    gap_abs = RERANK_GAP_ABS      # 绝对断崖阈值：分数下降的绝对差值阈值（全局常量配置）
+    min_topk = min(RERANK_MIN_TOPK, max_topk)
+    topk = max_topk
 
-    # 1) 断崖截断核心逻辑：从min_topk之后开始检测分数断崖，出现则提前截断
-    topk = max_topk  # 默认值：无断崖时取满硬上限（最多10条）
-    # 仅当实际可取值超过硬下限时，才触发断崖检测（否则直接取满min_topk）
     if topk > min_topk:
-        # 遍历范围：从min_topk-1到max_topk-2（索引从0开始），检测相邻两个文档的分数差
-        # 例：min_topk=3，max_topk=10 → 遍历i=2,3,4,5,6,7,8（对应第3~9条文档，检测与下一条的差距）
-        for i in range(min_topk - 1, max_topk - 1):
-            s1 = scored_docs[i].get("score")  # 当前位置文档的分数
-            s2 = scored_docs[i + 1].get("score")  # 下一个位置文档的分数
+        for index in range(min_topk - 1, max_topk - 1):
+            current_score = float(scored_docs[index].get("score") or 0.0)
+            next_score = float(scored_docs[index + 1].get("score") or 0.0)
+            absolute_gap = current_score - next_score
+            relative_gap = absolute_gap / (abs(current_score) + 1e-6)
+            if absolute_gap >= RERANK_GAP_ABS or relative_gap >= RERANK_GAP_RATIO:
+                topk = index + 1
+                logger.info(
+                    f"Reranker触发分数断崖截断：位置={index}，"
+                    f"分数={current_score:.4f}->{next_score:.4f}，最终TopK={topk}"
+                )
+                break
 
-            gap = s1 - s2  # 计算相邻文档的分数绝对差距（因已降序，gap≥0）
-            # 计算相对差距：绝对差距 / 当前文档分数（+1e-6避免除数为0/极小值，防止程序报错）
-            # 1e-6 是 Python 中科学计数法的写法，等价于 0.000001（10 的负 6 次方，也就是百万分之一）。
-            rel = gap / (abs(s1) + 1e-6)
-            # 触发断崖截断条件：绝对差距≥绝对阈值 OR 相对差距≥相对阈值
-            # 满足任一条件，说明下一条文档相关性骤降，截断在当前位置
-            if gap >= gap_abs or rel >= gap_ratio:
-                logger.info(f"Step 3: 触发断崖截断 @ index={i} (Score {s1:.4f} -> {s2:.4f}, Gap={gap:.4f})")
-                topk = i + 1  # 最终取前i+1条（索引转实际数量，如i=2 → 取前3条）
-                break  # 触发截断后立即退出循环，不再检测后续位置
-
-    # 按最终计算的topk值，截取前topk条文档
     topk_docs = scored_docs[:topk]
-    
-    logger.info(f"Step 3: 截断完成，保留前 {len(topk_docs)} 条文档 (TopK={topk})")
-    
-    if topk_docs:
-        preview = ", ".join([f"{d.get('chunk_id') or 'Web'}({d.get('score'):.3f})" for d in topk_docs[:3]])
-        logger.debug(f"Step 3: Top3 文档预览: {preview}")
-        
-    # 返回动态TopK处理后的文档列表
+    logger.info(
+        f"Reranker动态截断完成，保留文档={len(topk_docs)}，"
+        f"其中含图片文档={sum(1 for item in topk_docs if item.get('has_images'))}"
+    )
     return topk_docs
 
 
 def node_rerank(state):
-    """
-    执行BGE Reranker重排序。
-
-    执行步骤：
-    1. 合并RRF本地结果和联网结果；
-    2. 使用BGE Reranker计算相关性分数；
-    3. 按分数降序排列；
-    4. 根据分数断崖动态选择TopK；
-    5. 将重排摘要上传到Langfuse。
-
-    :param state: 当前LangGraph状态。
-    :return:
-        {
-            "reranked_docs": 最终重排文档列表
-        }
-    """
-
-    logger.info("---node_rerank 开始处理---")
-
-    # 获取当前节点名称。
+    """执行候选文档合并、BGE重排和动态TopK截断。"""
+    logger.info("---node_rerank开始处理---")
     node_name = sys._getframe().f_code.co_name
+    add_running_task(state["session_id"], node_name, state.get("is_stream"))
 
-    # 标记节点正在执行。
-    add_running_task(
-        state["session_id"],
-        node_name,
-        state.get("is_stream")
-    )
+    try:
+        question = str(state.get("rewritten_query") or state.get("original_query") or "").strip()
+        doc_items = step_1_merge_docs(state)
 
-    # 优先使用改写后的问题。
-    # 当改写结果不存在时，回退到用户原始问题。
-    question = (
-        state.get("rewritten_query")
-        or state.get("original_query")
-        or ""
-    ).strip()
-
-    # 合并RRF结果和联网检索结果，
-    # 转换成Reranker可以统一处理的结构。
-    doc_items = step_1_merge_docs(state)
-
-    # 创建retriever类型Observation。
-    # 虽然Reranker不负责第一阶段召回，但仍属于RAG检索排序链路。
-    with start_rag_observation(
+        with start_rag_observation(
             as_type="retriever",
             name="bge-reranker",
-            input_data={
-                "query": question,
-                "candidate_count": len(doc_items)
-            },
+            input_data={"query": question, "candidate_count": len(doc_items)},
             metadata={
                 "max_topk": RERANK_MAX_TOPK,
                 "min_topk": RERANK_MIN_TOPK,
                 "gap_ratio": RERANK_GAP_RATIO,
-                "gap_abs": RERANK_GAP_ABS
-            }
-    ) as rerank_observation:
+                "gap_abs": RERANK_GAP_ABS,
+            },
+        ) as rerank_observation:
+            scored_docs = step_2_rerank_docs(state, doc_items)
+            topk_docs = step_3_topk(scored_docs)
+            if rerank_observation is not None:
+                rerank_observation.update(
+                    output={
+                        "candidate_count": len(doc_items),
+                        "scored_count": len(scored_docs),
+                        "selected_count": len(topk_docs),
+                        "selected_image_document_count": sum(1 for item in topk_docs if item.get("has_images")),
+                        "documents": summarize_rerank_docs(topk_docs),
+                    }
+                )
 
-        # 使用BGE Reranker为每一条候选文档打分。
-        scored_docs = step_2_rerank_docs(
-            state,
-            doc_items
-        )
-
-        # 根据分数断崖执行动态TopK截断。
-        topk_docs = step_3_topk(scored_docs)
-
-        # 将重排结果摘要写入Langfuse。
-        # 不上传完整手册正文，只上传标识和分数。
-        if rerank_observation is not None:
-            rerank_observation.update(
-                output={
-                    "candidate_count": len(doc_items),
-                    "scored_count": len(scored_docs),
-                    "selected_count": len(topk_docs),
-                    "documents": summarize_rerank_docs(
-                        topk_docs
-                    )
-                }
-            )
-
-    logger.info(
-        f"Reranker执行完成，"
-        f"输入文档数={len(doc_items)}，"
-        f"最终保留文档数={len(topk_docs)}"
-    )
-
-    # 标记当前节点执行完成。
-    add_done_task(
-        state["session_id"],
-        node_name,
-        state.get("is_stream")
-    )
-
-    return {
-        "reranked_docs": topk_docs
-    }
+        return {"reranked_docs": topk_docs}
+    finally:
+        add_done_task(state["session_id"], node_name, state.get("is_stream"))
+        logger.info("---node_rerank处理结束---")
 
 
 if __name__ == "__main__":
-    print("\n" + "="*50)
-    print(">>> 启动 node_rerank 本地测试")
-    print("="*50)
-    
-    # 1. 模拟数据
-    # 1.1 RRF 本地文档数据
-    mock_rrf_chunks = [
-        {"chunk_id": "local_1", "content": "RRF是一种倒数排名融合算法", "title": "算法介绍", "score": 0.9},
-        {"chunk_id": "local_2", "content": "BGE是一个强大的重排序模型", "title": "模型介绍", "score": 0.8},
-        {"chunk_id": "local_3", "content": "无关的测试文档内容", "title": "测试文档", "score": 0.1} # 预期低分
-    ]
-    
-    # 1.2 MCP 联网搜索数据
-    mock_web_docs = [
-        {"title": "Rerank技术详解", "url": "http://web.com/1", "snippet": "Rerank即重排序，常用于RAG系统的第二阶段"},
-        {"title": "无关网页", "url": "http://web.com/2", "snippet": "今天天气不错，适合出去游玩"} # 预期低分
-    ]
-    
     mock_state = {
         "session_id": "test_rerank_session",
-        "rewritten_query": "什么是RRF和Rerank？", # 查询意图：想了解这两个算法
-        "rrf_chunks": mock_rrf_chunks,
-        "web_search_docs": mock_web_docs,
-        "is_stream": False
+        "rewritten_query": "操作面板上的启动按钮在哪里？",
+        "rrf_chunks": [
+            {
+                "chunk_id": "local_1",
+                "content": "启动按钮位于操作面板右下角，参考下图。",
+                "title": "操作面板",
+                "document_id": "doc_001",
+                "has_images": True,
+                "image_ids": ["image_001"],
+                "image_object_uris": ["minio://equipment-rag/images/panel.png"],
+                "image_page_numbers": [38],
+            }
+        ],
+        "web_search_docs": [],
+        "is_stream": False,
     }
-
     try:
-        # 运行节点
         result = node_rerank(mock_state)
-        reranked = result.get("reranked_docs", [])
-        
-        print("\n" + "="*50)
-        print(">>> 测试结果摘要:")
-        print(f"输入文档总数: {len(mock_rrf_chunks) + len(mock_web_docs)}")
-        print(f"输出文档总数: {len(reranked)}")
-        print("-" * 30)
-        
-        print("最终排名:")
-        for i, doc in enumerate(reranked, 1):
-            print(f"Rank {i}: Source={doc.get('source')}, Score={doc.get('score'):.4f}, Text={doc.get('text')[:20]}...")
-            
-        # 验证逻辑：
-        # 预期 "local_1", "local_2", "Rerank技术详解" 分数较高
-        # 预期 "local_3", "无关网页" 分数较低，可能被截断或排在最后
-        
-        top1_score = reranked[0].get("score")
-        if top1_score > 0:
-            print("\n[PASS] Rerank 打分正常")
-        else:
-            print("\n[FAIL] Rerank 打分异常 (均为0或负数)")
-
-        print("="*50)
-
-    except Exception as e:
-        logger.exception(f"测试运行期间发生未捕获异常: {e}")
+        logger.info(f"本地测试完成：{result}")
+    except Exception as exc:
+        logger.exception(f"node_rerank本地测试失败：{exc}")
