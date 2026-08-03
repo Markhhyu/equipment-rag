@@ -1,477 +1,385 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import mimetypes
 import os
 import re
 import sys
-import base64
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Tuple
-from collections import deque
+from typing import Any, Dict, Iterable, List, Tuple
 
-# MinIO相关依赖
 from minio import Minio
-from minio.deleteobjects import DeleteObject
 
-# 【核心改造1：移除原生OpenAI，导入LangChain工具类和多模态消息模块】
+from app.clients.image_asset_mongo_utils import get_image_asset_tool
 from app.clients.minio_utils import get_minio_client, minio_object_uri
-from app.import_process.agent.state import ImportGraphState
-from app.utils.task_utils import add_running_task
-# LLM客户端工具类（核心复用，替换原生OpenAI调用）
-from app.lm.lm_utils import get_llm_client
-# LangChain多模态依赖（消息构造+异常捕获）
-from langchain.messages import HumanMessage
-from langchain_core.exceptions import LangChainException
-# 项目配置
+from app.conf.image_processing_config import image_processing_config
 from app.conf.minio_config import minio_config
-from app.conf.lm_config import lm_config
-# 项目日志工具（统一使用）
 from app.core.logger import logger
-# api访问限速工具
-from app.utils.rate_limit_utils import apply_api_rate_limit
-# 提示词加载工具
-from app.core.load_prompt import load_prompt
+from app.import_process.agent.state import ImportGraphState
 from app.security.tenancy import tenant_object_prefix
+from app.utils.task_utils import add_running_task
 
-# MinIO支持的图片格式集合（小写后缀，统一匹配标准）
+
+# MinerU 常见图片格式。SVG 暂不纳入处理，避免视觉模型和前端渲染兼容性差异。
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
+MARKDOWN_IMAGE_PATTERN = re.compile(r"!\[(?P<alt>[^\]]*)\]\((?P<target>[^)]+)\)")
 
 
-# 步骤1：初始化MD核心数据，获取内容、文件路径、图片文件夹路径
-def step_1_get_content(state: ImportGraphState) -> Tuple[str, Path, Path]:
+@dataclass(frozen=True)
+class MarkdownImageReference:
+    """Markdown 中一处图片引用及其附近文本。"""
+
+    filename: str
+    raw_target: str
+    alt_text: str
+    context_before: str
+    context_after: str
+
+
+def _normalize_text(value: Any, max_chars: int = 240) -> str:
+    """清理 Markdown 标记和连续空白，并限制长度，避免图片资产记录保存过多无关正文。"""
+    text = str(value or "")
+    text = re.sub(r"!\[[^\]]*\]\([^)]+\)", " ", text)
+    text = re.sub(r"[`#>*_\-]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:max_chars]
+
+
+def _safe_path_segment(value: str) -> str:
+    """生成适合 MinIO 对象路径的单级目录名，保留中文并移除路径分隔符和控制字符。"""
+    cleaned = re.sub(r"[\\/:*?\"<>|\x00-\x1f]+", "_", str(value or "").strip())
+    cleaned = re.sub(r"\s+", "_", cleaned).strip("._")
+    return cleaned or "未命名文档"
+
+
+def _extract_target_path(raw_target: str) -> str:
     """
-    从全局状态中提取并初始化MD处理所需核心数据
-    :param state: 导入流程全局状态对象
-    :return: 三元组(MD文件内容, MD文件路径对象, 图片文件夹路径对象)
-    :raise FileNotFoundError: 当状态中无有效MD文件路径时抛出
+    从 Markdown 图片目标中提取实际路径。
+
+    MinerU 通常输出 images/xxx.png；同时兼容 <images/a b.png> 和带标题的写法。
     """
-    md_file_path = state["md_path"]
-    # 校验MD文件路径有效性
-    if not md_file_path:
-        raise FileNotFoundError(f"全局状态中无有效MD文件路径：{state['md_path']}")
-
-    path_obj = Path(md_file_path)
-    # 优先使用状态中已存在的MD内容，无则从文件读取
-    if not state["md_content"]:
-        with open(path_obj, "r", encoding="utf-8") as f:
-            md_content = f.read()
-        logger.debug(f"从文件读取MD内容完成，文件大小：{len(md_content)} 字符")
-    else:
-        md_content = state["md_content"]
-        logger.debug(f"从全局状态获取MD内容完成，内容大小：{len(md_content)} 字符")
-
-    # 图片文件夹固定为MD文件同级的images目录
-    images_dir = path_obj.parent / "images"
-    return md_content, path_obj, images_dir
+    target = (raw_target or "").strip()
+    if target.startswith("<") and ">" in target:
+        return target[1:target.index(">")].strip()
+    quoted_title = re.match(r"^(.*?)(?:\s+[\"'].*[\"'])$", target)
+    return (quoted_title.group(1) if quoted_title else target).strip()
 
 
-def is_supported_image(filename: str) -> bool:
+def _read_md_content(state: ImportGraphState) -> Tuple[str, Path, Path]:
+    """读取 Markdown 正文，并返回 Markdown 文件和同级 images 目录。"""
+    md_path = Path(str(state.get("md_path") or ""))
+    if not str(md_path) or not md_path.exists():
+        raise FileNotFoundError(f"Markdown文件不存在：{state.get('md_path')}")
+
+    md_content = str(state.get("md_content") or "")
+    if not md_content:
+        md_content = md_path.read_text(encoding="utf-8")
+        logger.info(f"已从文件读取Markdown正文，字符数：{len(md_content)}")
+
+    return md_content, md_path, md_path.parent / "images"
+
+
+def _scan_markdown_references(md_content: str) -> Dict[str, MarkdownImageReference]:
     """
-    判断文件是否为MinIO支持的图片格式（后缀不区分大小写）
-    :param filename: 文件名（含后缀）
-    :return: 支持返回True，否则False
-    """
-    return os.path.splitext(filename)[1].lower() in IMAGE_EXTENSIONS
+    扫描 Markdown 图片引用，并为每张图片保存第一处有效上下文。
 
-def find_image_in_md(md_content: str, image_filename: str, context_len: int = 100) -> List[Tuple[str, str]]:
+    同一图片可能在目录、正文或附录中重复引用；图片资产只保存一份，Markdown 中的全部引用仍会统一替换。
     """
-    查找MD内容中指定图片的所有引用位置，并返回每个位置的上下文文本
-    :param md_content: MD文件完整内容
-    :param image_filename: 图片文件名（含后缀）
-    :param context_len: 上下文截取长度，默认前后各100字符
-    :return: 上下文列表，每个元素为(上文, 下文)元组，无匹配则返回空列表
-    """
-    pattern = re.compile(r"!\[.*?\]\(.*?" + re.escape(image_filename) + r".*?\)")
-    results = []
+    references: Dict[str, MarkdownImageReference] = {}
+    context_chars = image_processing_config.context_chars
 
-    for m in pattern.finditer(md_content):
-        start, end = m.span()
-        pre_text = md_content[max(0, start - context_len):start]
-        post_text = md_content[end:min(len(md_content), end + context_len)]
-        # 打印图片上下文，便于调试
-        logger.debug(f"图片[{image_filename}]匹配到引用，上文：{pre_text.strip()}")
-        logger.debug(f"图片[{image_filename}]匹配到引用，下文：{post_text.strip()}")
-        results.append((pre_text, post_text))
-    if not results:
-        logger.debug(f"MD内容中未找到图片[{image_filename}]的引用")
-    return results
-
-# 步骤2：扫描图片文件夹，筛选MD中实际引用的支持格式图片
-def step_2_scan_images(md_content: str, images_dir: Path) -> List[Tuple[str, str, Tuple[str, str]]]:
-    """
-    扫描MinerU输出的图片目录，筛选Markdown实际引用的图片。
-    """
-
-    # 纯文本PDF可能不会生成images目录，此时直接跳过图片处理。
-    if not images_dir.exists() or not images_dir.is_dir():
-        logger.info(f"MinerU结果中不存在图片目录，跳过图片处理：{images_dir}")
-        return []
-
-    targets = []
-    # 遍历图片文件夹所有文件
-    # 遍历图片文件夹所有文件
-    for image_file in os.listdir(images_dir):
-        # 过滤非支持格式的图片
-        if not is_supported_image(image_file):
-            logger.debug(f"图片格式不支持，跳过：{image_file}")
+    for match in MARKDOWN_IMAGE_PATTERN.finditer(md_content):
+        target_path = _extract_target_path(match.group("target"))
+        filename = Path(target_path.replace("\\", "/")).name
+        if not filename or Path(filename).suffix.lower() not in IMAGE_EXTENSIONS:
             continue
-        # 组装图片完整路径
-        img_path = str(images_dir / image_file)
-        # 查找图片在MD中的引用上下文
-        context_list = find_image_in_md(md_content, image_file)
-        # 过滤MD中未引用的图片
-        if not context_list:
-            logger.warning(f"图片未在MD中引用，跳过处理：{image_file}")
-            continue
-        # 组装待处理图片元数据，取第一个匹配的上下文
-        targets.append((image_file, img_path, context_list[0]))
-        logger.info(f"图片加入待处理列表：{image_file}")
-    logger.info(f"图片扫描完成，共筛选出待处理图片：{len(targets)} 张")
-    return targets
 
-
-def encode_image_to_base64(image_path: str) -> str:
-    """
-    将本地图片文件编码为Base64字符串（用于多模态大模型输入）
-    :param image_path: 图片本地完整路径
-    :return: 图片的Base64编码字符串（UTF-8解码）
-    """
-    with open(image_path, "rb") as img_file:
-        base64_str = base64.b64encode(img_file.read()).decode("utf-8")
-    logger.debug(f"图片Base64编码完成，文件：{image_path}，编码后长度：{len(base64_str)}")
-    return base64_str
-
-def summarize_image(image_path: str, root_folder: str, image_content: Tuple[str, str]) -> str:
-    """
-    调用多模态大模型生成图片内容摘要（适配LangChain工具类，复用项目统一LLM客户端）
-    生成的摘要用于Markdown图片标题，严格控制50字以内中文描述
-    :param image_path: 图片本地完整路径
-    :param root_folder: 文档所属文件夹/主名，为大模型提供上下文
-    :param image_content: 图片在MD中的上下文元组，格式(上文文本, 下文文本)
-    :return: 图片内容摘要（异常时返回默认值"图片描述"）
-    """
-    # 将图片编码为Base64，适配多模态大模型输入要求
-    base64_image = encode_image_to_base64(image_path)
-    try:
-        # 1. 获取项目统一LLM客户端（自动缓存，传入多模态模型名）
-        lvm_client = get_llm_client(model=lm_config.lv_model)
-
-        # 加载并渲染提示词（核心：传入所有占位符对应的变量）
-        prompt_text = load_prompt(
-            name="image_summary",  # 提示词文件名（不带.prompt）
-            root_folder=root_folder,  # 对应{root_folder}
-            image_content=image_content  # 对应{image_content[0]}、{image_content[1]}
+        references.setdefault(
+            filename,
+            MarkdownImageReference(
+                filename=filename,
+                raw_target=target_path,
+                alt_text=_normalize_text(match.group("alt"), 160),
+                context_before=_normalize_text(md_content[max(0, match.start() - context_chars):match.start()], context_chars),
+                context_after=_normalize_text(md_content[match.end():match.end() + context_chars], context_chars),
+            ),
         )
 
-        # 2. 构造LangChain标准多模态HumanMessage（兼容千问/OpenAI等视觉模型）
-        messages = [
-            HumanMessage(
-                content=[
-                    # 文本提示词：携带上下文，限定摘要规则
+    logger.info(f"Markdown图片引用扫描完成，共发现{len(references)}张唯一图片")
+    return references
+
+
+def _walk_json(value: Any) -> Iterable[Dict[str, Any]]:
+    """递归遍历 MinerU JSON，返回其中所有字典节点，兼容不同版本的外层结构。"""
+    if isinstance(value, dict):
+        yield value
+        for child in value.values():
+            yield from _walk_json(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _walk_json(child)
+
+
+def _first_value(data: Dict[str, Any], keys: Tuple[str, ...]) -> Any:
+    """按候选字段顺序读取首个非空值，用于兼容 MinerU 不同版本字段名。"""
+    for key in keys:
+        value = data.get(key)
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+def _load_structured_metadata(state: ImportGraphState) -> Dict[str, Dict[str, Any]]:
+    """
+    从 MinerU content_list 或 middle.json 提取图片页码、坐标和图注。
+
+    结构化文件缺失或字段变化时自动降级到 Markdown 上下文，不影响文档主流程。
+    """
+    candidate_paths = [
+        state.get("mineru_content_list_path"),
+        state.get("mineru_content_list_v2_path"),
+        state.get("mineru_middle_json_path"),
+    ]
+    result: Dict[str, Dict[str, Any]] = {}
+
+    for raw_path in candidate_paths:
+        path = Path(str(raw_path or ""))
+        if not str(path) or not path.exists():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            for item in _walk_json(payload):
+                image_path = _first_value(item, ("img_path", "image_path", "image_url", "image"))
+                if not isinstance(image_path, str):
+                    continue
+                filename = Path(image_path.replace("\\", "/")).name
+                if Path(filename).suffix.lower() not in IMAGE_EXTENSIONS:
+                    continue
+
+                page_value = _first_value(item, ("page_number", "page_no", "page", "page_idx", "page_index"))
+                page_number = None
+                try:
+                    page_number = int(page_value)
+                    if "page_idx" in item or "page_index" in item:
+                        page_number += 1
+                except (TypeError, ValueError):
+                    pass
+
+                result.setdefault(
+                    filename,
                     {
-                        "type": "text",
-                        "text": prompt_text
+                        "page_number": page_number,
+                        "bbox": _first_value(item, ("bbox", "box", "position")),
+                        "structured_caption": _normalize_text(
+                            _first_value(item, ("img_caption", "image_caption", "caption", "title")),
+                            240,
+                        ),
                     },
-                    # 多模态核心：Base64编码图片数据
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{base64_image}"
-                        }
-                    }
-                ]
-            )
-        ]
+                )
 
-        # 3. LangChain标准调用：invoke方法（工具类已封装超时/重试等参数）
-        response = lvm_client.invoke(messages)
+            if result:
+                logger.info(f"已从MinerU结构化结果提取{len(result)}张图片的页码或图注信息")
+                break
+        except Exception as exc:
+            logger.warning(f"读取MinerU结构化图片信息失败，已降级使用Markdown上下文：{path}，原因：{exc}")
 
-        # 4. 解析响应（LangChain统一返回content字段，统一格式无需多层解析）
-        summary = response.content.strip().replace("\n", "")
-        logger.info(f"图片摘要生成成功：{image_path}，摘要：{summary}")
-        return summary
+    return result
 
-    except LangChainException as e:
-        logger.error(f"图片摘要生成失败（LangChain框架异常）：{image_path}，错误信息：{str(e)}")
-        return "图片描述"
-    except Exception as e:
-        logger.error(f"图片摘要生成失败（系统异常）：{image_path}，错误信息：{str(e)}")
-        return "图片描述"
 
-def step_3_generate_summaries(doc_stem: str, targets: List[Tuple[str, str, Tuple[str, str]]],
-                              requests_per_minute: int = 9) -> Dict[str, str]:
+def _calculate_file_hash(path: Path) -> str:
+    """分块计算图片SHA-256，用于去重、追踪和后续视觉结果复用。"""
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        while chunk := file.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _build_base_description(reference: MarkdownImageReference, metadata: Dict[str, Any]) -> str:
     """
-    步骤3：批量为待处理图片生成内容摘要，带API速率限制防止触发大模型限流
-    :param doc_stem: 文档文件名（不含后缀），作为大模型prompt上下文
-    :param targets: 待处理图片列表，元素为(图片文件名, 图片完整路径, 图片上下文)
-    :param requests_per_minute: 每分钟最大API请求数，默认9次（按大模型限制调整）
-    :return: 图片摘要字典，键：图片文件名，值：图片内容摘要
+    优先使用结构化图注和 Markdown 原始描述；两者都缺失时使用图片附近正文。
+
+    该描述会立即写入 Markdown 和图片资产，即使视觉增强尚未完成，文本检索仍能获得基本图片语义。
     """
-    summaries = {}
-    request_times = deque()  # 外部初始化请求时间队列，跨循环复用
-
-    for img_file, image_path, context in targets:
-        # 直接调用抽离的公共工具方法，参数和原逻辑完全一致
-        apply_api_rate_limit(request_times, requests_per_minute, window_seconds=60)
-        logger.debug(f"开始生成图片摘要：{image_path}")
-        summaries[img_file] = summarize_image(image_path, root_folder=doc_stem, image_content=context)
-
-    logger.info(f"图片摘要批量生成完成，共处理{len(summaries)}张图片")
-    return summaries
-
-
-def clean_minio_directory(minio_client: Minio, prefix: str) -> None:
-    """
-    幂等性清理MinIO指定目录下的所有旧文件，防止重名文件内容混淆和垃圾文件堆积
-    幂等性：多次调用结果一致，无文件时不报错
-    :param minio_client: 初始化完成的MinIO客户端对象
-    :param prefix: MinIO目录前缀（要清理的目录路径）
-    """
-    try:
-        # 列出指定前缀下的所有对象（递归遍历子目录）
-        objects_to_delete = minio_client.list_objects(
-            bucket_name=minio_config.bucket_name,
-            prefix=prefix,
-            recursive=True
-        )
-        # 构造删除对象列表
-        delete_list = [DeleteObject(obj.object_name) for obj in objects_to_delete]
-
-        if delete_list:
-            logger.info(f"开始清理MinIO旧文件，待删除文件数：{len(delete_list)}，目录：{prefix}")
-            # 批量删除对象
-            errors = minio_client.remove_objects(minio_config.bucket_name, delete_list)
-            # 遍历删除错误信息，记录异常
-            for error in errors:
-                logger.error(f"MinIO文件删除失败：{error}")
-        else:
-            logger.debug(f"MinIO目录无旧文件，无需清理：{prefix}")
-    except Exception as e:
-        logger.error(f"MinIO目录清理失败：{prefix}，错误信息：{str(e)}")
+    candidates = [
+        metadata.get("structured_caption"),
+        reference.alt_text,
+        f"{reference.context_before} {reference.context_after}",
+    ]
+    for candidate in candidates:
+        description = _normalize_text(candidate, 240)
+        if description:
+            return description
+    return "文档相关图片"
 
 
-def upload_images_batch(minio_client: Minio, upload_dir: str, targets: List[Tuple[str, str, Tuple[str, str]]]) -> Dict[
-    str, str]:
-    """
-    批量上传待处理图片至MinIO，返回图片文件名与访问URL的映射关系
-    :param minio_client: 初始化完成的MinIO客户端对象
-    :param upload_dir: MinIO上传根目录
-    :param targets: 待处理图片列表，元素为(图片文件名, 图片完整路径, 图片上下文)
-    :return: 图片URL字典，键：图片文件名，值：MinIO访问URL
-    """
-    urls = {}
-    for img_file, img_path, _ in targets:
-        # 构造MinIO对象名称
-        object_name =  f"{upload_dir}/{img_file}"
-        logger.debug(f"构造MinIO对象名称完成：{object_name}")
-        # 上传单张图片并获取URL
-        """
-        := 是 Python 3.8+ 引入的海象运算符（Walrus Operator），核心作用是 **「表达式内赋值 + 结果判断」一体化 **：
-        在执行判断、循环等逻辑的同一个表达式中，完成变量赋值和赋值结果的使用 / 判断，替代传统「先赋值、后判断」的两行代码，让逻辑更简洁。
-        """
-        if img_url := upload_to_minio(minio_client, img_path, object_name):
-            urls[img_file] = img_url
-    logger.info(f"图片批量上传完成，成功上传{len(urls)}/{len(targets)}张图片")
-    return urls
-
-def upload_to_minio(minio_client: Minio, local_path: str, object_name: str) -> str | None:
-    """
-    将单张本地图片上传至MinIO对象存储，并返回公网可访问URL
-    :param minio_client: 初始化完成的MinIO客户端对象
-    :param local_path: 图片本地完整路径
-    :param object_name: MinIO中要存储的对象名称（带目录）
-    :return: 图片MinIO访问URL（上传失败返回None）
-    """
-    try:
-        logger.info(f"开始上传图片至MinIO：本地路径={local_path}，MinIO对象名={object_name}")
-        # 上传本地文件至MinIO（fput_object：文件流上传，适合大文件）
-        minio_client.fput_object(
-            bucket_name=minio_config.bucket_name,  # MinIO存储桶名（从配置读取）
-            object_name=object_name,  # MinIO对象名称
-            file_path=local_path,  # 本地文件路径
-            # 自动推断图片Content-Type（如image/png、image/jpeg）
-            # 入参：文件路径字符串（可带目录，如/a/b/test.jpg、demo.tar.gz）；
-            # 返回值：元组(root, ext)，其中：
-            # root：文件主名（含目录，去掉最后一个后缀的完整部分）；
-            # ext：文件后缀（以.开头，仅包含最后一个扩展名，如.jpg、.gz，无后缀则为空字符串""）；
-            # 关键规则：仅识别 ** 最后一个.** 作为后缀分隔符，多后缀文件仅拆分最后一个（如test.tar.gz拆分为("test.tar", ".gz")）。
-            content_type=f"image/{os.path.splitext(local_path)[1][1:]}"
-        )
-
-        object_uri = minio_object_uri(minio_config.bucket_name, object_name)
-        logger.info(f"图片上传成功，对象引用：{object_uri}")
-        return object_uri
-    except Exception as e:
-        logger.error(f"图片上传MinIO失败：{local_path}，错误信息：{str(e)}")
-        return None
-
-def merge_summary_and_url(summaries: Dict[str, str], urls: Dict[str, str]) -> Dict[str, Tuple[str, str]]:
-    """
-    合并图片摘要字典和URL字典，过滤掉上传失败无URL的图片
-    :param summaries: 图片摘要字典，键：图片文件名，值：内容摘要
-    :param urls: 图片URL字典，键：图片文件名，值：MinIO访问URL
-    :return: 合并后的图片信息字典，键：图片文件名，值：(摘要, URL)元组
-    """
-    image_info = {}
-    # 遍历摘要字典，仅保留有对应URL的图片
-    for image_file, summary in summaries.items():
-        if url := urls.get(image_file):
-            image_info[image_file] = (summary, url)
-    logger.info(f"图片摘要与URL合并完成，有效图片信息{len(image_info)}条")
-    return image_info
+def _upload_image(minio_client: Minio, image_path: Path, object_name: str) -> str:
+    """上传单张图片并返回稳定的 minio:// 对象引用；失败时抛出异常交由单图降级处理。"""
+    content_type = mimetypes.guess_type(image_path.name)[0] or "application/octet-stream"
+    minio_client.fput_object(
+        bucket_name=minio_config.bucket_name,
+        object_name=object_name,
+        file_path=str(image_path),
+        content_type=content_type,
+    )
+    return minio_object_uri(minio_config.bucket_name, object_name)
 
 
-def process_md_file(md_content: str, image_info: Dict[str, Tuple[str, str]]) -> str:
-    """
-    核心功能：替换MD内容中的本地图片引用为MinIO远程引用
-    替换规则：![原描述](本地路径) → ![图片摘要](MinIO访问URL)
-    :param md_content: 原始MD文件内容
-    :param image_info: 合并后的图片信息字典，键：图片文件名，值：(摘要, URL)
-    :return: 替换后的新MD内容
-    """
-    for img_filename, (summary, new_url) in image_info.items():
-        # 正则匹配MD图片标签，忽略大小写，兼容不同路径写法
-        # 正则规则：![任意描述](任意路径+图片文件名+任意后缀)
-        pattern = re.compile(
-            r"!\[.*?\]\(.*?" + re.escape(img_filename) + r".*?\)",
-            re.IGNORECASE
-        )
-        # 替换匹配内容：使用新摘要作为图片描述，新URL作为图片路径
-        # - 如果你的 summary 和 new_url 是完全可控的纯文本（不含反斜杠） ：这两种写法确实 一模一样 。
-        # - 如果你想写出“防御性代码”（Defensive Code），防止未来某天被特殊字符坑 ：请坚持使用 Lambda 写法 。它是最稳健、最安全的做法。
-        # 替换写法示例：md_content = pattern.sub(lambda m: f"![{summary}]({new_url})", md_content)
-        md_content = pattern.sub( f"![{summary}]({new_url})", md_content)
-        logger.debug(f"完成MD图片引用替换：{img_filename} → {new_url}")
-
-    logger.info(f"MD文件图片引用替换完成，共替换{len(image_info)}处图片引用")
-    logger.debug(f"替换后MD内容：{md_content[:500]}..." if len(md_content) > 500 else f"替换后MD内容：{md_content}")
-    return md_content
-
-def step_4_upload_and_replace(minio_client: Minio, doc_stem: str, targets: List[Tuple[str, str, Tuple[str, str]]],
-                              summaries: Dict[str, str], md_content: str, tenant_id: str = "local") -> str:
-    """
-    步骤4：核心流程-图片上传MinIO + 合并摘要&URL + 替换MD图片引用
-    完整流程：清理MinIO旧目录 → 批量上传新图片 → 合并摘要和URL → 替换MD内容
-    :param minio_client: 初始化完成的MinIO客户端对象
-    :param doc_stem: 文档文件名（不含后缀），作为MinIO上传子目录名（按文档隔离）
-    :param targets: 待处理图片列表，元素为(图片文件名, 图片完整路径, 图片上下文)
-    :param summaries: 图片摘要字典，键：图片文件名，值：内容摘要
-    :param md_content: 原始MD文件内容
-    :return: 图片引用替换后的新MD内容
-    """
-    # 构造MinIO上传目录：配置根目录 + 文档主名（去除空格，避免路径问题）
-    minio_img_dir = minio_config.minio_img_dir
-    upload_dir = tenant_object_prefix(tenant_id, minio_img_dir, doc_stem.replace(" ", ""))
-
-    # 步骤1：清理该文档对应的MinIO旧目录，保证幂等性
-    clean_minio_directory(minio_client, upload_dir)
-    # 步骤2：批量上传图片至MinIO，获取URL映射
-    urls = upload_images_batch(minio_client, upload_dir, targets)
-    # 步骤3：合并图片摘要和URL，过滤上传失败的图片
-    # Dict[str, Tuple[str, str]]  键：图片文件名，值：(摘要, URL)元组
-    image_info = merge_summary_and_url(summaries, urls)
-    # 步骤4：替换MD内容中的本地图片引用为MinIO远程引用
-    if image_info:
-        md_content = process_md_file(md_content, image_info)
-
-    return md_content
+def _decide_visual_status(base_description: str, file_size: int, pending_count: int) -> Tuple[str, str]:
+    """根据模式、图片大小、已有语义和单文档额度判断是否进入异步视觉增强队列。"""
+    config = image_processing_config
+    if config.process_mode == "off":
+        return "skipped", "已关闭视觉增强"
+    if file_size < config.min_image_bytes:
+        return "skipped", "图片文件过小，按图标或装饰图片处理"
+    if config.process_mode == "smart" and len(base_description) >= config.strong_caption_min_chars:
+        return "skipped", "现有图注或上下文已能说明图片内容"
+    if pending_count >= config.caption_max_per_document:
+        return "skipped", "已达到单文档视觉增强数量上限"
+    return "pending", "等待后台视觉增强"
 
 
-def step_5_backup_new_md_file(origin_md_path: str, md_content: str) -> str:
-    """
-    步骤5：将处理后的MD内容保存为新文件（原文件不变，避免数据丢失）
-    新文件命名规则：原文件名 + _new.md（如test.md → test_new.md）
-    :param origin_md_path: 原始MD文件完整路径
-    :param md_content: 处理后的新MD内容
-    :return: 新MD文件的完整路径
-    """
-    # 构造新文件路径：替换原后缀为 _new.md
-    new_md_file_name = os.path.splitext(origin_md_path)[0] + "_new.md"
+def _replace_markdown_images(md_content: str, replacements: Dict[str, Tuple[str, str]]) -> str:
+    """把本地图片路径替换成 MinIO 对象引用，同时保留可检索的图片描述。"""
+    def replace(match: re.Match[str]) -> str:
+        target_path = _extract_target_path(match.group("target"))
+        filename = Path(target_path.replace("\\", "/")).name
+        replacement = replacements.get(filename)
+        if not replacement:
+            return match.group(0)
+        description, object_uri = replacement
+        return f"![{description}]({object_uri})"
 
-    # 写入新MD内容（覆盖写入，若文件已存在则更新）
-    with open(new_md_file_name, "w", encoding="utf-8") as f:
-        f.write(md_content)
+    return MARKDOWN_IMAGE_PATTERN.sub(replace, md_content)
 
-    logger.info(f"处理后MD文件已保存，新文件路径：{new_md_file_name}")
-    return new_md_file_name
+
+def _save_processed_markdown(md_path: Path, content: str) -> Path:
+    """把替换图片地址后的正文保存为新文件，保留 MinerU 原始 Markdown 便于问题排查。"""
+    new_path = md_path.with_name(f"{md_path.stem}_new.md")
+    new_path.write_text(content, encoding="utf-8")
+    return new_path
 
 
 def node_md_img(state: ImportGraphState) -> ImportGraphState:
     """
-    MD文件图片处理核心节点 - 五步法完成图片全流程处理
-    核心流程：
-    1. 初始化获取MD内容、文件路径、图片文件夹路径
-    2. 扫描图片文件夹，筛选MD中实际引用的支持格式图片
-    3. 调用多模态大模型为图片生成内容摘要
-    4. 将图片上传至MinIO，替换MD中本地图片路径为MinIO访问URL，并填充图片摘要
-    5. 备份原MD文件，保存处理后的新MD文件并更新状态
-    :param state: 导入流程全局状态对象，包含task_id、md_path、md_content等核心参数
-    :return: 更新后的全局状态对象（md_content/md_path为处理后新值）
+    将 MinerU 提取的图片资产化，但不在导入主链路同步调用视觉模型。
+
+    处理步骤：
+    1. 扫描 Markdown 图片引用，并读取 MinerU 页码、坐标和图注；
+    2. 按租户、文档和任务编号上传到独立 MinIO 目录，避免同名文档相互覆盖；
+    3. 将图片元数据和异步处理状态写入 MongoDB；
+    4. 把 Markdown 本地路径替换为稳定对象引用后立即进入切片和向量化。
+
+    单张图片上传或资产保存失败只记录日志，不阻塞正文知识库入库。
     """
-    # 记录当前运行任务，用于任务监控和状态追踪
     add_running_task(state["task_id"], sys._getframe().f_code.co_name)
 
-    # 步骤1：初始化数据，获取MD核心信息
-    md_content, path_obj, images_dir = step_1_get_content(state)
+    md_content, md_path, images_dir = _read_md_content(state)
     state["md_content"] = md_content
-
-    # 无图片文件夹，直接跳过所有图片处理逻辑
-    if not images_dir.exists():
-        logger.info(f"图片文件夹不存在，跳过图片处理：{images_dir.absolute()}")
+    if not images_dir.exists() or not images_dir.is_dir():
+        logger.info(f"MinerU结果中不存在图片目录，跳过图片资产处理：{images_dir}")
+        state["image_assets"] = []
+        state["image_enrichment_summary"] = {"total": 0, "pending": 0, "skipped": 0, "failed": 0}
         return state
 
-    # 初始化MinIO客户端，失败则终止流程
+    references = _scan_markdown_references(md_content)
+    if not references:
+        logger.info("Markdown中没有本地图片引用，跳过图片资产处理")
+        state["image_assets"] = []
+        state["image_enrichment_summary"] = {"total": 0, "pending": 0, "skipped": 0, "failed": 0}
+        return state
+
     minio_client = get_minio_client()
-    if not minio_client:
-        logger.warning("MinIO客户端初始化失败，已跳过图片处理全流程")
-        return state
-    
-    # 步骤2：扫描并筛选MD中引用的支持格式图片
-    # 参数结构示例：(image_file, img_path, context_list[0])
-    targets = step_2_scan_images(md_content, images_dir)
-    if not targets:
-        logger.info("未检测到MD中引用的支持格式图片，跳过后续处理")
+    if minio_client is None:
+        logger.warning("MinIO客户端初始化失败，保留原Markdown图片路径并继续正文入库")
         return state
 
-    # 步骤3：调用多模态大模型生成图片摘要（修复原代码传参错误：使用文件主名而非MD内容）
-    summaries = step_3_generate_summaries(path_obj.stem, targets)
+    tenant_id = str(state.get("tenant_id") or "local")
+    document_id = str(state.get("task_id") or md_path.stem)
+    document_name = _safe_path_segment(str(state.get("file_title") or md_path.stem))
+    structured_metadata = _load_structured_metadata(state)
+    replacements: Dict[str, Tuple[str, str]] = {}
+    assets: List[Dict[str, Any]] = []
+    pending_count = 0
+    failed_count = 0
 
-    # 步骤4：上传图片至MinIO，替换MD图片路径并填充摘要
-    new_md_content = step_4_upload_and_replace(
-        minio_client,
-        path_obj.stem,
-        targets,
-        summaries,
-        md_content,
-        str(state.get("tenant_id") or "local"),
-    )
+    for filename, reference in references.items():
+        image_path = images_dir / filename
+        if not image_path.exists() or not image_path.is_file():
+            logger.warning(f"Markdown引用的图片文件不存在，已跳过：{image_path}")
+            failed_count += 1
+            continue
+
+        try:
+            content_hash = _calculate_file_hash(image_path)
+            metadata = structured_metadata.get(filename, {})
+            base_description = _build_base_description(reference, metadata)
+            object_name = tenant_object_prefix(
+                tenant_id,
+                minio_config.minio_img_dir,
+                document_name,
+                document_id,
+                filename,
+            )
+            object_uri = _upload_image(minio_client, image_path, object_name)
+            visual_status, status_reason = _decide_visual_status(base_description, image_path.stat().st_size, pending_count)
+            if visual_status == "pending":
+                pending_count += 1
+
+            image_id = hashlib.sha256(
+                f"{tenant_id}|{document_id}|{filename}|{content_hash}".encode("utf-8")
+            ).hexdigest()
+            asset = {
+                "image_id": image_id,
+                "tenant_id": tenant_id,
+                "document_id": document_id,
+                "document_name": document_name,
+                "filename": filename,
+                "content_hash": content_hash,
+                "content_type": mimetypes.guess_type(filename)[0] or "application/octet-stream",
+                "file_size": image_path.stat().st_size,
+                "object_uri": object_uri,
+                "page_number": metadata.get("page_number"),
+                "bbox": metadata.get("bbox"),
+                "alt_text": reference.alt_text,
+                "structured_caption": metadata.get("structured_caption") or "",
+                "context_before": reference.context_before,
+                "context_after": reference.context_after,
+                "base_description": base_description,
+                "visual_description": base_description if visual_status == "skipped" else "",
+                "visual_status": visual_status,
+                "status_reason": status_reason,
+                "retry_count": 0,
+            }
+            assets.append(asset)
+            replacements[filename] = (base_description, object_uri)
+        except Exception as exc:
+            failed_count += 1
+            logger.error(f"图片资产处理失败，已跳过当前图片并继续导入：{image_path}，原因：{exc}", exc_info=True)
+
+    if assets:
+        try:
+            saved_count = get_image_asset_tool().save_assets(assets)
+            logger.info(f"图片资产保存完成，本次生成{len(assets)}条，MongoDB新增{saved_count}条")
+        except Exception as exc:
+            logger.error(f"图片资产写入MongoDB失败，正文仍继续入库：{exc}", exc_info=True)
+
+    new_md_content = _replace_markdown_images(md_content, replacements)
+    new_md_path = _save_processed_markdown(md_path, new_md_content)
     state["md_content"] = new_md_content
+    state["md_path"] = str(new_md_path)
+    state["image_assets"] = assets
+    state["image_enrichment_summary"] = {
+        "total": len(assets),
+        "pending": pending_count,
+        "skipped": sum(1 for item in assets if item.get("visual_status") == "skipped"),
+        "failed": failed_count,
+    }
 
-    # 步骤5：备份并保存新MD文件，更新状态中的文件路径
-    new_md_file_name = step_5_backup_new_md_file(state['md_path'], new_md_content)
-    state["md_path"] = new_md_file_name
-    logger.info(f"MD图片处理完成，新文件已保存：{new_md_file_name}")
-
+    logger.info(
+        f"Markdown图片资产处理完成：总数={len(assets)}，待增强={pending_count}，"
+        f"无需增强={state['image_enrichment_summary']['skipped']}，失败={failed_count}，新文件={new_md_path}"
+    )
     return state
-
-if __name__ == "__main__":
-    """本地测试入口：单独运行该文件时，执行MD图片处理全流程测试"""
-    from app.utils.path_util import PROJECT_ROOT
-    logger.info(f"本地测试 - 项目根目录：{PROJECT_ROOT}")
-
-    # 测试MD文件路径（需手动将测试文件放入对应目录）
-    test_md_name = os.path.join(r"output\hak180产品安全手册", "hak180产品安全手册.md")
-    test_md_path = os.path.join(PROJECT_ROOT, test_md_name)
-
-    # 校验测试文件是否存在
-    if not os.path.exists(test_md_path):
-        logger.error(f"本地测试 - 测试文件不存在：{test_md_path}")
-        logger.info("请检查文件路径，或手动将测试MD文件放入项目根目录的output目录下")
-    else:
-        # 构造测试状态对象，模拟流程入参
-        test_state = {
-            "md_path": test_md_path,
-            "task_id": "test_task_123456",
-            "md_content": ""
-        }
-        logger.info("开始本地测试 - MD图片处理全流程")
-        # 执行核心处理流程
-        result_state = node_md_img(test_state)
-        logger.info(f"本地测试完成 - 处理结果状态：{result_state}")
