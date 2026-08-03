@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     # 必须与启动脚本使用的 MinerU 端口一致，默认无需修改。
     [ValidateRange(1, 65535)]

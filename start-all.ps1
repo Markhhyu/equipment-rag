@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     # 默认会重新构建两个应用镜像。代码没有变化时传入 -SkipBuild 可以明显加快启动。
     [Alias("NoBuild")]
