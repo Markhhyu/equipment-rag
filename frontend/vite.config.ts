@@ -11,6 +11,7 @@ export default defineConfig({
       input: {
         chat: resolve(__dirname, 'chat.html'),
         import: resolve(__dirname, 'import.html'),
+        knowledge: resolve(__dirname, 'knowledge.html'),
       },
     },
   },

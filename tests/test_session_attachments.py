@@ -104,3 +104,8 @@ def test_user_attachment_forces_visual_reasoning_but_is_not_echoed_as_answer_ima
 
 def test_query_state_declares_session_attachment_field():
     assert "user_image_refs" in QueryGraphState.__annotations__
+
+
+def test_operation_question_displays_document_images_without_forcing_vision_model():
+    assert node_image_reasoning.should_display_document_images("LJ2268 怎么使用") is True
+    assert node_image_reasoning.is_visual_question("LJ2268 怎么使用") is False

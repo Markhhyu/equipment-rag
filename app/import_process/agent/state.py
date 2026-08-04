@@ -11,6 +11,16 @@ class ImportGraphState(TypedDict):
     """
     task_id: str  # 任务唯一ID，用于追踪日志
     tenant_id: str  # 调用方租户标识，用于存储与检索隔离
+    document_id: str  # 跨版本稳定的知识文档编号
+    revision_id: str  # 本次导入生成的不可变版本编号
+    version_label: str  # 人工可读业务版本，例如V2.1或2026版
+    trust_level: str  # enterprise_sop/manufacturer_manual/internal_reference
+    device_model: str  # 适用设备型号，例如LJ2268
+    software_version: str  # 适用上位机/设备软件版本
+    firmware_version: str  # 适用固件版本
+    hardware_revision: str  # 适用硬件修订版
+    site_id: str  # 可选厂区/站点范围
+    asset_ids: list[str]  # 可选设备实例编号列表
 
     # --- 流程控制标记 ---
     is_md_read_enabled: bool  # 是否启用 Markdown 读取路径
@@ -54,6 +64,16 @@ class ImportGraphState(TypedDict):
 graph_default_state: ImportGraphState = {
     "task_id": "",
     "tenant_id": "local",
+    "document_id": "",
+    "revision_id": "",
+    "version_label": "legacy-v1",
+    "trust_level": "manufacturer_manual",
+    "device_model": "",
+    "software_version": "",
+    "firmware_version": "",
+    "hardware_revision": "",
+    "site_id": "",
+    "asset_ids": [],
     "is_pdf_read_enabled": False,
     "is_md_read_enabled": False,
     "is_normal_split_enabled": True,

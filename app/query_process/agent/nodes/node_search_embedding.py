@@ -4,6 +4,7 @@ import sys
 from dotenv import find_dotenv, load_dotenv
 
 from app.clients.milvus_utils import create_hybrid_search_requests, get_milvus_client, hybrid_search
+from app.clients.document_registry_utils import filter_queryable_hits
 from app.conf.rag_tuning_config import rag_tuning_config
 from app.core.logger import logger
 from app.lm.embedding_utils import generate_embeddings
@@ -25,6 +26,19 @@ QUERY_OUTPUT_FIELDS = [
     "file_title",
     "item_name",
     "document_id",
+    "revision_id",
+    "version_label",
+    "trust_level",
+    "device_model",
+    "software_version",
+    "firmware_version",
+    "hardware_revision",
+    "site_id",
+    "asset_ids",
+    "page_numbers",
+    "page_start",
+    "page_end",
+    "governance_managed",
     "has_images",
     "image_ids",
     "image_object_uris",
@@ -132,15 +146,19 @@ def node_search_embedding(state):
                 reqs=requests,
                 ranker_weights=(rag_tuning_config.dense_weight, rag_tuning_config.sparse_weight),
                 norm_score=True,
-                limit=rag_tuning_config.retrieval_result_limit,
+                # 先多取候选，再过滤停用/归档版本，避免失效版本挤占最终TopK。
+                limit=rag_tuning_config.retrieval_candidate_limit,
                 output_fields=QUERY_OUTPUT_FIELDS,
             )
-            hits = result[0] if result and len(result) > 0 else []
+            raw_hits = result[0] if result and len(result) > 0 else []
+            hits = filter_queryable_hits(str(state.get("tenant_id") or "local"), raw_hits)
+            hits = hits[: rag_tuning_config.retrieval_result_limit]
 
             if retrieval_observation is not None:
                 retrieval_observation.update(
                     output={
                         "hit_count": len(hits),
+                        "filtered_inactive_count": max(0, len(raw_hits) - len(hits)),
                         "hits": summarize_milvus_hits(hits),
                         "image_metadata_hit_count": sum(
                             1

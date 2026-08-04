@@ -23,7 +23,7 @@
 
 1. [先了解项目能做什么](#项目能做什么)
 2. [准备环境并完成最小配置](#5-分钟快速开始)
-3. [打开导入页面和聊天页面](#服务地址)
+3. [打开导入、治理和聊天页面](#服务地址)
 4. [需要调整效果时查看配置地图](#配置地图)
 5. [遇到问题时查看排障清单](#常见问题)
 
@@ -54,7 +54,9 @@
 | PDF / Markdown 导入 | PDF 使用独立 MinerU 服务解析；Markdown 可直接导入 |
 | 多模态图片链路 | 图片保存到 MinIO，可异步生成说明，并按问题返回相关手册图片 |
 | 会话图片附件 | 聊天页可上传 JPG/PNG/WebP 辅助本轮分析；附件不进入 Milvus、文档切片或长期知识库 |
-| Vue 管理页面 | Vue 3 + TypeScript 双页面，支持拖拽上传、SSE 进度、历史消息、反馈和 API Key 设置 |
+| Vue 业务页面 | Vue 3 + TypeScript 聊天、快速导入、知识治理三页面，支持拖拽上传、版本操作、历史消息、反馈和 API Key 设置 |
+| 知识版本治理 | 文档注册表、草稿审核、按适用范围发布、并行软件/固件版本、回滚、停用、启用和操作审计 |
+| 可核验回答 | 助手消息返回文档名、业务版本、适用软件/固件、章节、PDF物理页码和证据摘要，关键结论要求引用资料编号 |
 | 型号确认 | 明确型号优先精确识别；模糊名称按阈值自动确认或要求用户澄清 |
 | 混合检索 | BGE-M3 Dense + Sparse、HyDE、RRF、BGE/Qwen Reranker |
 | 多轮问答 | MongoDB 保存严格按时间排列的用户/助手消息、设备名、图片和 Trace ID |
@@ -84,7 +86,8 @@ flowchart LR
         IMAGE --> SPLIT["结构化切片"]
         SPLIT --> ITEM["设备名称识别"]
         ITEM --> EMB["BGE-M3 Dense + Sparse"]
-        EMB --> MILVUS["Milvus"]
+        EMB --> MILVUS["Milvus 历史版本向量"]
+        IMPORT_API --> REGISTRY["MongoDB 文档注册表"]
     end
 
     subgraph Query["设备问答"]
@@ -95,10 +98,11 @@ flowchart LR
         SEARCH --> RRF["RRF 融合"]
         RRF --> RERANK["Reranker 精排"]
         RERANK --> VISION["按需图片理解"]
-        VISION --> ANSWER["答案与图片 / SSE"]
+        VISION --> ANSWER["答案、图片与结构化来源 / SSE"]
     end
 
-    MILVUS --> SEARCH
+    MILVUS --> FILTER["发布 / 停用状态过滤"] --> SEARCH
+    REGISTRY --> FILTER
     SESSION_IMAGE -. "仅本轮视觉分析，不入Milvus" .-> VISION
     QUERY_API <--> MONGO["MongoDB 历史 / 运行 / Checkpoint"]
     ANSWER --> LANGFUSE["Langfuse Trace / Score"]
@@ -243,7 +247,8 @@ docker compose logs --tail 200 import-api query-api
 | 服务 | 默认地址 | 用途 |
 |---|---|---|
 | 导入页面 | <http://127.0.0.1:8000/import.html> | 上传 PDF/Markdown 并查看导入进度 |
-| 聊天页面 | <http://127.0.0.1:8001/chat.html> | 多轮问答、图片展示和反馈 |
+| 知识库治理 | <http://127.0.0.1:8000/knowledge.html> | 文档版本、发布、回滚、停用和操作审计 |
+| 聊天页面 | <http://127.0.0.1:8001/chat.html> | 多轮问答、结构化来源、图片展示和反馈 |
 | 导入 API 文档 | <http://127.0.0.1:8000/docs> | 导入接口 Swagger |
 | 查询 API 文档 | <http://127.0.0.1:8001/docs> | 问答接口 Swagger |
 | MinIO 控制台 | <http://127.0.0.1:9001> | 查看原始文件和图片对象 |
@@ -398,15 +403,26 @@ CHAT_ATTACHMENT_ALLOWED_CONTENT_TYPES=image/jpeg,image/png,image/webp
 
 ## 使用流程
 
-### 1. 导入知识库
+### 1. 导入和发布知识库
 
-1. 打开 <http://127.0.0.1:8000/import.html>；
-2. 上传 `.pdf` 或 `.md` 文件；
-3. 等待文本导入状态完成；
-4. 图片异步增强启用时，可继续观察图片处理进度；
-5. 在 Attu 中确认 `equipment_chunks` 和 `equipment_item_names` 已写入数据。
+生产资料建议使用治理入口：
 
-PDF 会经过 MinerU；Markdown 会直接进入图片提取、切片、设备识别和向量入库流程。同一设备重新导入时会更新对应向量数据。
+1. 打开 <http://127.0.0.1:8000/knowledge.html>；
+2. 选择“导入新文档”或在现有文档上选择“新版本”；
+3. 填写业务版本、来源可信等级和适用范围（设备型号、软件、固件、硬件修订版，可选厂区和设备编号），默认保持“导入完成后自动发布”为关闭；
+4. 导入完成后查看版本、切片数和错误信息，审核无误再发布；
+5. 新版本发布后，只有相同适用范围的旧生效版本自动归档；同型号的其他软件/固件版本继续生效，向量和原文件均保留；
+6. 文档停用后立即退出查询，启用后恢复，不会删除 MongoDB、Milvus 或 MinIO 数据。
+
+<http://127.0.0.1:8000/import.html> 是兼容原有习惯的快速导入入口，导入完成后会自动发布。它适合本地试验；企业生产环境优先使用治理入口。
+
+升级前已经存在的 Milvus 文档默认继续参与查询，避免升级后知识库突然不可用。首次进入治理页时点击“登记旧知识库”，系统会把可识别的旧文档登记为 `legacy-v1`；登记完成后即可在后台停用和审计。该操作不会重写或删除旧向量。
+
+PDF 会经过 MinerU，并根据 `content_list.json` 为正文切片写入 PDF 物理页码；Markdown 会直接进入图片提取、切片、设备识别和向量入库流程，因此只展示章节、不伪造页码。同一文档的不同 `revision_id` 在 Milvus 中并存，查询时只放行当前已发布且未停用的适用版本。若同型号存在多个并行软件/固件版本且问题中无法确定具体版本，系统会先要求确认，禁止混合回答。
+
+回答证据按“企业批准 SOP > 厂商手册 > 内部参考 > 外部网页”排序。命中企业 SOP 或厂商手册时，外部网页不会进入生成上下文；旧知识默认按厂商手册兼容。绕过安全联锁等请求会被确定性拒绝并标记人工复核，高风险操作缺少权威资料时也不会生成步骤或参数。
+
+> 升级前已经导入的旧切片没有正文物理页码。需要在治理页把原 PDF 重新导入为新版本，发布后证据卡才会显示可靠页码。
 
 ### 2. 发起问答
 
@@ -419,6 +435,8 @@ LJ2268 的控制面板各按钮在哪里？请结合手册图片说明。
 当问题只包含“打印机”“真空泵”等模糊名称时，系统可能要求确认候选设备。确认后继续使用同一个 `session_id`，系统会结合最近历史完成多轮问答。
 
 聊天页支持把现场图片直接拖入输入框，也可以只上传图片、不输入文字。图片上传后会先保存到当前会话私有目录，再把稳定的对象引用交给问答流程。点击“清空会话”或“新建会话”时，历史消息和该会话附件会一起删除，长期知识库内容不受影响。
+
+助手回答下方的“回答依据”会展示本轮实际使用的文档、版本、章节、片段和页码。正文中的 `[1]`、`[2]` 与证据卡片编号对应；涉及安全、参数和操作步骤时仍应打开原始手册复核。
 
 ### 3. API 示例
 
@@ -453,6 +471,15 @@ curl -N "http://127.0.0.1:8001/stream/demo-session-002"
 | 方法 | 路径 | 用途 |
 |---|---|---|
 | `POST` | `/upload` | 上传并导入文档 |
+| `POST` | `/knowledge/documents/import` | 导入受治理的新文档或新版本；默认草稿 |
+| `GET` | `/knowledge/documents` | 查询治理文档和状态 |
+| `GET` | `/knowledge/documents/{document_id}` | 查看文档全部版本 |
+| `POST` | `/knowledge/documents/{document_id}/versions/{revision_id}/publish` | 发布版本并仅归档同适用范围旧版本 |
+| `POST` | `/knowledge/documents/{document_id}/versions/{revision_id}/rollback` | 回滚到历史版本 |
+| `POST` | `/knowledge/documents/{document_id}/disable` | 停用文档但保留数据 |
+| `POST` | `/knowledge/documents/{document_id}/enable` | 重新启用文档 |
+| `POST` | `/knowledge/legacy/register` | 一次性登记升级前的旧知识库 |
+| `GET` | `/knowledge/audit` | 查询治理操作审计 |
 | `GET` | `/status/{task_id}` | 查看导入和图片增强进度 |
 | `POST` | `/query` | 发起同步或流式问答 |
 | `GET` | `/attachments/config` | 获取聊天图片数量、大小和类型限制 |
@@ -577,7 +604,7 @@ npm run dev
 npm run build
 ```
 
-构建产物位于 `frontend/dist/`，不会提交到 Git。FastAPI 优先提供构建后的 Vue 页面；本地尚未构建时会回退到原来的单文件 HTML，避免后端开发被前端依赖阻塞。
+构建产物位于 `frontend/dist/`，不会提交到 Git。FastAPI 优先提供构建后的 Vue 页面；聊天页和快速导入页在本地尚未构建时会回退到原来的单文件 HTML，治理页必须先完成前端构建。
 
 提交前运行一条完整质量门禁：
 
@@ -618,7 +645,7 @@ equipment-rag-agent/
 │  └─ observability/           # Prometheus 与 Grafana 配置
 ├─ docs/                       # 配置、安全、运行恢复和观测文档
 ├─ evals/                      # 评测配置、数据集和示例预测
-├─ frontend/                   # Vue 3 + TypeScript 聊天页与导入页
+├─ frontend/                   # Vue 3 + TypeScript 聊天、快速导入与知识治理页
 ├─ prompts/                    # Prompt 模板
 ├─ scripts/check.py            # 本地质量检查入口
 ├─ tests/                      # 单元与回归测试
@@ -701,10 +728,12 @@ BGE-M3 与 Reranker 第一次加载需要下载并初始化模型。模型会保
 ## Roadmap
 
 - [ ] 完成 Neo4j 设备实体关系检索
-- [ ] 增加厂区、型号、软件版本和 PLC 版本等元数据过滤
-- [ ] 建立本地 SOP 与联网资料的可信等级
+- [x] 增加厂区、型号、软件/固件/硬件版本和设备实例适用范围；多范围可并行生效，未确认版本时禁止混答
+- [x] 建立本地 SOP 与联网资料的可信等级，并接入拒答和人工复核策略
 - [ ] 增加严格拒答、人工审核和企业 OIDC/SSO
 - [ ] 增加设备告警分析与 OEE 分析 Agent
+- [x] 文档注册表、多版本发布、回滚、停用和治理审计
+- [x] 回答结构化来源、版本、章节、片段与页码展示
 - [x] API Key、角色和租户级数据隔离
 - [x] MongoDB 运行注册表、LangGraph Checkpoint 和失败恢复
 - [x] 确定性评测、覆盖率和自动回归门禁

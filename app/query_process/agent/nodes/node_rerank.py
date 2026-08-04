@@ -3,10 +3,12 @@ from typing import Any, Dict, List
 
 from app.conf.rag_tuning_config import rag_tuning_config
 from app.conf.image_processing_config import image_processing_config
+from app.clients.document_registry_utils import get_document_registry
 from app.core.logger import logger
 from app.lm.reranker_utils import get_reranker_model
+from app.knowledge_trust import enforce_trust_precedence, trust_metadata
 from app.observability.rag_observability import start_rag_observation, summarize_rerank_docs
-from app.query_process.agent.nodes.node_image_reasoning import is_visual_question
+from app.query_process.agent.nodes.node_image_reasoning import should_display_document_images
 from app.utils.task_utils import add_done_task, add_running_task
 
 
@@ -19,6 +21,19 @@ RERANK_GAP_ABS: float = rag_tuning_config.rerank_gap_abs
 # 图片推理节点依赖document_id和image_object_uris定位MongoDB图片资产，不能只保留正文和分数。
 LOCAL_METADATA_FIELDS = (
     "document_id",
+    "revision_id",
+    "version_label",
+    "trust_level",
+    "device_model",
+    "software_version",
+    "firmware_version",
+    "hardware_revision",
+    "site_id",
+    "asset_ids",
+    "page_numbers",
+    "page_start",
+    "page_end",
+    "governance_managed",
     "file_title",
     "item_name",
     "parent_title",
@@ -54,6 +69,14 @@ def _copy_local_metadata(entity: Dict[str, Any]) -> Dict[str, Any]:
         int(value)
         for value in _normalize_list(metadata.get("image_page_numbers"))
         if isinstance(value, int) or str(value).isdigit()
+    ]
+    metadata["page_numbers"] = [
+        int(value)
+        for value in _normalize_list(metadata.get("page_numbers"))
+        if isinstance(value, int) or str(value).isdigit()
+    ]
+    metadata["asset_ids"] = [
+        str(value) for value in _normalize_list(metadata.get("asset_ids")) if str(value).strip()
     ]
     metadata["has_images"] = bool(metadata["image_object_uris"] or metadata["image_ids"] or metadata.get("has_images"))
     return metadata
@@ -91,6 +114,7 @@ def step_1_merge_docs(state) -> List[Dict[str, Any]]:
             "source": "local",
         }
         item.update(_copy_local_metadata(entity))
+        item.update(trust_metadata(item.get("trust_level"), source="local"))
         doc_items.append(item)
 
     for index, doc in enumerate(web_docs):
@@ -102,8 +126,7 @@ def step_1_merge_docs(state) -> List[Dict[str, Any]]:
         if not text:
             continue
 
-        doc_items.append(
-            {
+        web_item = {
                 "text": text,
                 "doc_id": None,
                 "chunk_id": None,
@@ -119,8 +142,11 @@ def step_1_merge_docs(state) -> List[Dict[str, Any]]:
                 "image_ids": [],
                 "image_object_uris": [],
                 "image_page_numbers": [],
+                "page_numbers": [],
+                "asset_ids": [],
             }
-        )
+        web_item.update(trust_metadata(doc.get("trust_level"), source="web"))
+        doc_items.append(web_item)
 
     logger.info(
         f"重排候选文档合并完成，总数={len(doc_items)}，"
@@ -134,6 +160,101 @@ def _build_scored_document(item: Dict[str, Any], score: float) -> Dict[str, Any]
     scored_document = dict(item)
     scored_document["score"] = float(score)
     return scored_document
+
+
+def _version_profile(document: Dict[str, Any]) -> tuple[str, ...]:
+    return tuple(
+        str(document.get(field) or "").strip()
+        for field in ("device_model", "software_version", "firmware_version", "hardware_revision", "site_id")
+    ) + ("、".join(sorted(str(value) for value in (document.get("asset_ids") or []) if str(value).strip())),)
+
+
+def _profile_label(profile: tuple[str, ...]) -> str:
+    labels = ("型号", "软件", "固件", "硬件", "厂区", "设备编号")
+    parts = [f"{label} {value}" for label, value in zip(labels, profile) if value]
+    return " / ".join(parts) if parts else "通用版本（未限定设备配置）"
+
+
+def resolve_version_scope(
+    question: str,
+    documents: List[Dict[str, Any]],
+    known_profiles: Dict[str, List[tuple[str, ...]]] | None = None,
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """识别同一文档族的并行适用版本；无法唯一匹配时阻止混答并返回可选范围。"""
+    normalized_question = "".join(str(question or "").casefold().split())
+    profiles_by_document: Dict[str, set[tuple[str, ...]]] = {}
+    for document in documents:
+        if str(document.get("source") or "local") != "local":
+            continue
+        document_id = str(document.get("document_id") or "").strip()
+        if not document_id:
+            continue
+        profiles_by_document.setdefault(document_id, set()).add(_version_profile(document))
+    for document_id, profiles in (known_profiles or {}).items():
+        if profiles:
+            profiles_by_document[document_id] = set(profiles)
+
+    selected_profiles: Dict[str, tuple[str, ...]] = {}
+    ambiguous: List[Dict[str, Any]] = []
+    for document_id, profiles in profiles_by_document.items():
+        if len(profiles) <= 1:
+            continue
+        matched = {
+            profile
+            for profile in profiles
+            if any(value and "".join(value.casefold().split()) in normalized_question for value in profile)
+        }
+        if len(matched) == 1:
+            selected_profiles[document_id] = next(iter(matched))
+            continue
+        ambiguous.append(
+            {
+                "document_id": document_id,
+                "options": [_profile_label(profile) for profile in sorted(profiles)],
+            }
+        )
+
+    ambiguous_ids = {item["document_id"] for item in ambiguous}
+    filtered = [
+        document
+        for document in documents
+        if (
+            str(document.get("source") or "local") != "local"
+            or not (document_id := str(document.get("document_id") or "").strip())
+            or (
+                document_id not in ambiguous_ids
+                and (document_id not in selected_profiles or _version_profile(document) == selected_profiles[document_id])
+            )
+        )
+    ]
+    return filtered, ambiguous
+
+
+def _load_active_profiles(tenant_id: str, documents: List[Dict[str, Any]]) -> Dict[str, List[tuple[str, ...]]]:
+    """从治理注册表读取完整生效范围，避免因TopK只命中一个版本而错误跳过版本确认。"""
+    document_ids = {
+        str(document.get("document_id") or "").strip()
+        for document in documents
+        if str(document.get("source") or "local") == "local" and document.get("document_id")
+    }
+    if not document_ids:
+        return {}
+    registry = get_document_registry()
+    result: Dict[str, List[tuple[str, ...]]] = {}
+    for document_id in document_ids:
+        try:
+            document = registry.get_document(tenant_id, document_id) or {}
+        except Exception as exc:
+            logger.warning(f"读取文档生效适用范围失败，继续使用本轮候选判断：document_id={document_id}，原因={exc}")
+            continue
+        active_profiles = [
+            _version_profile(version)
+            for version in (document.get("versions") or [])
+            if str(version.get("status") or "") == "active"
+        ]
+        if active_profiles:
+            result[document_id] = active_profiles
+    return result
 
 
 def step_2_rerank_docs(state, doc_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -258,6 +379,16 @@ def step_3_topk(
                 f"视觉问题保留图片Chunk：动态TopK={original_count}，"
                 f"补充图片文档={added_image_count}，最终文档={len(topk_docs)}"
             )
+    # TopK 已由相关性截断；在最终证据内让高可信资料排在前面，确保引用编号和 Prompt
+    # 优先呈现企业 SOP/厂商手册，外部网页只能作为补充材料。
+    topk_docs.sort(
+        key=lambda item: (int(item.get("trust_rank") or 0), float(item.get("score") or 0.0)),
+        reverse=True,
+    )
+    before_trust_filter = len(topk_docs)
+    topk_docs = enforce_trust_precedence(topk_docs)
+    if len(topk_docs) < before_trust_filter:
+        logger.info(f"权威本地证据已命中，移除外部网页证据={before_trust_filter - len(topk_docs)}")
     logger.info(
         f"Reranker动态截断完成，保留文档={len(topk_docs)}，"
         f"其中含图片文档={sum(1 for item in topk_docs if item.get('has_images'))}"
@@ -273,7 +404,7 @@ def node_rerank(state):
 
     try:
         question = str(state.get("rewritten_query") or state.get("original_query") or "").strip()
-        preserve_image_docs = is_visual_question(question)
+        preserve_image_docs = should_display_document_images(question)
         doc_items = step_1_merge_docs(state)
 
         with start_rag_observation(
@@ -289,6 +420,12 @@ def node_rerank(state):
             },
         ) as rerank_observation:
             scored_docs = step_2_rerank_docs(state, doc_items)
+            known_profiles = _load_active_profiles(str(state.get("tenant_id") or "local"), scored_docs)
+            scored_docs, version_scope_options = resolve_version_scope(
+                question,
+                scored_docs,
+                known_profiles=known_profiles,
+            )
             topk_docs = step_3_topk(scored_docs, preserve_image_docs=preserve_image_docs)
             if rerank_observation is not None:
                 rerank_observation.update(
@@ -301,7 +438,7 @@ def node_rerank(state):
                     }
                 )
 
-        return {"reranked_docs": topk_docs}
+        return {"reranked_docs": topk_docs, "version_scope_options": version_scope_options}
     finally:
         add_done_task(state["session_id"], node_name, state.get("is_stream"))
         logger.info("---node_rerank处理结束---")

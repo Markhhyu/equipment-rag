@@ -46,7 +46,18 @@ def node_attach_image_metadata(state: ImportGraphState) -> ImportGraphState:
     chunks = state.get("chunks") or []
     image_assets = state.get("image_assets") or []
     tenant_id = str(state.get("tenant_id") or "local")
-    document_id = task_id or str(state.get("file_title") or "未命名文档")
+    revision_id = str(state.get("revision_id") or task_id or "").strip()
+    document_id = str(state.get("document_id") or revision_id or state.get("file_title") or "未命名文档")
+    version_label = str(state.get("version_label") or "legacy-v1")
+    trust_level = str(state.get("trust_level") or "manufacturer_manual")
+    applicability = {
+        "device_model": str(state.get("device_model") or ""),
+        "software_version": str(state.get("software_version") or ""),
+        "firmware_version": str(state.get("firmware_version") or ""),
+        "hardware_revision": str(state.get("hardware_revision") or ""),
+        "site_id": str(state.get("site_id") or ""),
+        "asset_ids": [str(value) for value in (state.get("asset_ids") or []) if str(value).strip()],
+    }
 
     asset_by_uri: Dict[str, Dict[str, Any]] = {}
     for asset in image_assets:
@@ -66,6 +77,11 @@ def node_attach_image_metadata(state: ImportGraphState) -> ImportGraphState:
 
         chunk["tenant_id"] = tenant_id
         chunk["document_id"] = document_id
+        chunk["revision_id"] = revision_id
+        chunk["version_label"] = version_label
+        chunk["trust_level"] = trust_level
+        chunk.update(applicability)
+        chunk["governance_managed"] = True
 
         content = str(chunk.get("content") or "")
         object_uris = _unique_strings(MINIO_IMAGE_PATTERN.findall(content))
@@ -98,6 +114,8 @@ def node_attach_image_metadata(state: ImportGraphState) -> ImportGraphState:
     state["chunks"] = chunks
     state["image_chunk_link_summary"] = {
         "document_id": document_id,
+        "revision_id": revision_id,
+        "version_label": version_label,
         "chunk_count": len(chunks),
         "linked_chunk_count": linked_chunk_count,
         "linked_image_reference_count": linked_image_count,

@@ -8,6 +8,7 @@ import {
   Connection,
   Delete,
   DocumentAdd,
+  Files,
   FolderOpened,
   Loading,
   MoreFilled,
@@ -43,6 +44,33 @@ interface ChatMessage {
   status: MessageStatus
   doneList?: string[]
   runningList?: string[]
+  sources?: AnswerSource[]
+  requiresHumanReview?: boolean
+  reviewReason?: string
+}
+
+interface AnswerSource {
+  index: number
+  source: string
+  chunk_id: string
+  document_id: string
+  revision_id: string
+  version_label: string
+  title: string
+  section: string
+  part?: number | string | null
+  page_numbers: number[]
+  url: string
+  snippet: string
+  score?: number | null
+  device_model: string
+  software_version: string
+  firmware_version: string
+  hardware_revision: string
+  site_id: string
+  trust_level: string
+  trust_label: string
+  authoritative: boolean
 }
 
 interface PendingImage {
@@ -70,6 +98,9 @@ interface HistoryResponse {
     image_urls?: string[]
     trace_id?: string
     feedback_value?: 0 | 1 | null
+    sources?: AnswerSource[]
+    requires_human_review?: boolean
+    review_reason?: string
     ts?: number | string
   }>
 }
@@ -96,6 +127,7 @@ const fileInput = ref<HTMLInputElement | null>(null)
 let activeStream: AbortController | null = null
 
 const importUrl = siblingServiceUrl('8000', '/import.html')
+const knowledgeUrl = siblingServiceUrl('8000', '/knowledge.html')
 const shortSessionId = computed(() => sessionId.value.slice(0, 8))
 const canSend = computed(() => !sending.value && (!!question.value.trim() || pendingImages.value.length > 0))
 const attachmentHint = computed(() => `每轮最多 ${attachmentConfig.value.max_files} 张，单张不超过 ${formatBytes(attachmentConfig.value.max_bytes)}`)
@@ -108,6 +140,14 @@ function authErrorMessage(error: unknown): string {
 
 function uniqueId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+function sanitizeAssistantText(text: string): string {
+  return text
+    .replace(/(?:\n|^)\s*【图片】\s*(?:\n\s*(?:<https?:\/\/[^>]+>|https?:\/\/\S+)\s*)+/gi, '\n')
+    .replace(/<?https?:\/\/(?:www\.)?example\.com\/[^\s>]*>?/gi, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
 }
 
 async function scrollToBottom(): Promise<void> {
@@ -132,10 +172,13 @@ async function loadHistory(): Promise<void> {
     messages.value = payload.items.map((item) => ({
       id: item._id || uniqueId(item.role),
       role: item.role,
-      text: item.text,
+      text: item.role === 'assistant' ? sanitizeAssistantText(item.text) : item.text,
       imageUrls: item.image_urls ?? [],
       traceId: item.trace_id,
       feedback: item.feedback_value,
+      sources: item.sources ?? [],
+      requiresHumanReview: item.requires_human_review ?? false,
+      reviewReason: item.review_reason ?? '',
       time: item.ts,
       status: 'ready',
     }))
@@ -210,11 +253,14 @@ function applySseMessage(message: SseMessage, assistant: ChatMessage): void {
     assistant.doneList = (data.done_list as string[] | undefined) ?? assistant.doneList
     assistant.runningList = (data.running_list as string[] | undefined) ?? assistant.runningList
   } else if (message.event === 'final') {
-    assistant.text = String(data.answer ?? assistant.text)
+    assistant.text = sanitizeAssistantText(String(data.answer ?? assistant.text))
     assistant.imageUrls = (data.image_urls as string[] | undefined) ?? []
     assistant.traceId = String(data.trace_id ?? assistant.traceId ?? '')
     assistant.doneList = (data.done_list as string[] | undefined) ?? assistant.doneList
     assistant.runningList = (data.running_list as string[] | undefined) ?? []
+    assistant.sources = (data.sources as AnswerSource[] | undefined) ?? []
+    assistant.requiresHumanReview = Boolean(data.requires_human_review)
+    assistant.reviewReason = String(data.review_reason ?? '')
     assistant.status = 'ready'
   } else if (message.event === 'error') {
     assistant.status = 'error'
@@ -231,7 +277,7 @@ async function sendMessage(): Promise<void> {
     id: uniqueId('user'), role: 'user', text, imageUrls: selectedImages.map((item) => item.previewUrl), status: 'ready', time: Date.now() / 1000,
   }
   const assistant: ChatMessage = {
-    id: uniqueId('assistant'), role: 'assistant', text: '', imageUrls: [], status: 'streaming', doneList: [], runningList: [],
+    id: uniqueId('assistant'), role: 'assistant', text: '', imageUrls: [], status: 'streaming', doneList: [], runningList: [], sources: [],
   }
   messages.value.push(userMessage, assistant)
   question.value = ''
@@ -368,6 +414,7 @@ onBeforeUnmount(() => {
 
       <div class="sidebar-footer">
         <a :href="importUrl" class="sidebar-link"><el-icon><DocumentAdd /></el-icon>知识库导入</a>
+        <a :href="knowledgeUrl" class="sidebar-link"><el-icon><Files /></el-icon>知识库治理</a>
         <button class="sidebar-link" @click="settingsVisible = true"><el-icon><Setting /></el-icon>连接设置</button>
       </div>
     </aside>
@@ -419,6 +466,11 @@ onBeforeUnmount(() => {
                 </div>
               </div>
 
+              <div v-if="message.role === 'assistant' && message.requiresHumanReview" class="review-alert">
+                <el-icon><CircleClose /></el-icon>
+                <div><strong>需要人工复核</strong><span>{{ message.reviewReason }}</span></div>
+              </div>
+
               <details v-if="message.role === 'assistant' && ((message.doneList?.length ?? 0) + (message.runningList?.length ?? 0) > 0)" class="progress-panel">
                 <summary>
                   <span><el-icon><Check /></el-icon>{{ message.doneList?.length ?? 0 }} 项已完成</span>
@@ -427,6 +479,34 @@ onBeforeUnmount(() => {
                 <div class="progress-steps">
                   <div v-for="node in message.doneList" :key="`done-${node}`" class="progress-step done"><el-icon><Check /></el-icon>{{ formatNodeName(node) }}</div>
                   <div v-for="node in message.runningList" :key="`running-${node}`" class="progress-step running"><el-icon class="is-loading"><Loading /></el-icon>{{ formatNodeName(node) }}</div>
+                </div>
+              </details>
+
+              <details v-if="message.role === 'assistant' && message.sources?.length" class="source-panel">
+                <summary>
+                  <span><el-icon><Files /></el-icon>回答依据</span>
+                  <span>{{ message.sources.length }} 个知识片段</span>
+                </summary>
+                <div class="source-list">
+                  <article v-for="source in message.sources" :key="`${message.id}-${source.index}-${source.chunk_id}`" class="source-card">
+                    <div class="source-card-head">
+                      <span class="source-index">资料 {{ source.index }}</span>
+                      <span class="source-trust" :class="{ authoritative: source.authoritative }">{{ source.trust_label }}</span>
+                      <span v-if="source.version_label" class="source-version">{{ source.version_label }}</span>
+                      <span v-if="source.page_numbers?.length" class="source-pages">PDF 第 {{ source.page_numbers.join('、') }} 页</span>
+                    </div>
+                    <a v-if="source.url" :href="source.url" target="_blank" rel="noreferrer">{{ source.title }}</a>
+                    <strong v-else>{{ source.title }}</strong>
+                    <p v-if="source.section">{{ source.section }}<template v-if="source.part !== null && source.part !== undefined"> · 片段 {{ source.part }}</template></p>
+                    <div class="source-scope" v-if="source.device_model || source.software_version || source.firmware_version || source.hardware_revision || source.site_id">
+                      <span v-if="source.device_model">型号 {{ source.device_model }}</span>
+                      <span v-if="source.software_version">软件 {{ source.software_version }}</span>
+                      <span v-if="source.firmware_version">固件 {{ source.firmware_version }}</span>
+                      <span v-if="source.hardware_revision">硬件 {{ source.hardware_revision }}</span>
+                      <span v-if="source.site_id">厂区 {{ source.site_id }}</span>
+                    </div>
+                    <blockquote>{{ source.snippet }}</blockquote>
+                  </article>
                 </div>
               </details>
 

@@ -5,6 +5,7 @@ from typing import Iterable, Optional
 from dotenv import find_dotenv, load_dotenv
 
 from app.clients.milvus_utils import create_hybrid_search_requests, get_milvus_client, hybrid_search
+from app.clients.document_registry_utils import filter_queryable_hits
 from app.conf.rag_tuning_config import rag_tuning_config
 from app.core.load_prompt import load_prompt
 from app.core.logger import logger
@@ -108,9 +109,12 @@ def step_2_search_embedding_hyde(
         reqs=requests,
         ranker_weights=ranker_weights,
         norm_score=norm_score,
-        limit=top_k,
+        # 查询阶段先取较多候选，生命周期过滤后再截断。
+        limit=max(req_limit, top_k),
         output_fields=fields,
     )
+    if result and len(result) > 0:
+        result[0] = filter_queryable_hits(str(tenant_id or "local"), result[0])[:top_k]
     hit_count = len(result[0]) if result and len(result) > 0 else 0
     logger.info(f"HyDE混合检索完成，召回数量={hit_count}")
     return result

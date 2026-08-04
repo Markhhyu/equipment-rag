@@ -20,6 +20,7 @@ class EvalCase:
     forbidden_terms: list[str] = field(default_factory=list)
     expected_source_ids: list[str] = field(default_factory=list)
     must_clarify: bool = False
+    must_review: bool = False
     require_citation: bool = False
     max_latency_ms: float | None = None
     tags: list[str] = field(default_factory=list)
@@ -46,6 +47,7 @@ class EvalCase:
             forbidden_terms=_string_list(data.get("forbidden_terms"), "forbidden_terms"),
             expected_source_ids=_string_list(data.get("expected_source_ids"), "expected_source_ids"),
             must_clarify=bool(data.get("must_clarify", False)),
+            must_review=bool(data.get("must_review", False)),
             require_citation=bool(data.get("require_citation", False)),
             max_latency_ms=max_latency_ms,
             tags=_string_list(data.get("tags"), "tags"),
@@ -59,6 +61,7 @@ class Prediction:
     latency_ms: float | None = None
     retrieved_source_ids: list[str] | None = None
     clarified: bool | None = None
+    requires_human_review: bool | None = None
     trace_id: str | None = None
 
     @classmethod
@@ -81,11 +84,16 @@ class Prediction:
         if clarified is not None:
             clarified = bool(clarified)
 
+        requires_human_review = data.get("requires_human_review")
+        if requires_human_review is not None:
+            requires_human_review = bool(requires_human_review)
+
         return cls(
             case_id=case_id,
             answer=str(data.get("answer") or ""),
             latency_ms=latency_ms,
             retrieved_source_ids=source_ids,
             clarified=clarified,
+            requires_human_review=requires_human_review,
             trace_id=str(data.get("trace_id") or "") or None,
         )

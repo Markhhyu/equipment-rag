@@ -48,6 +48,11 @@ def main() -> int:
     )
     run("uv", "run", "--frozen", "python", "-m", "compileall", "-q", "app")
 
+    if shutil.which("npm"):
+        run("npm", "run", "--prefix", "frontend", "build")
+    else:
+        print("\n未找到 npm，已跳过前端生产构建。", flush=True)
+
     if shutil.which("docker"):
         run("docker", "compose", "config", "--quiet")
         run("docker", "compose", "--env-file", ".env.example", "config", "--quiet")

@@ -19,7 +19,7 @@ CHUNKS_COLLECTION_NAME = milvus_config.chunks_collection
 # Milvus切片数据入库核心节点
 # 核心能力：将上游向量化后的文本切片批量存入Milvus，实现幂等性写入
 # 核心设计：
-#   1. 幂等性：插入前删除同item_name旧数据，避免重复存储
+#   1. 幂等性：插入前只删除同revision_id旧数据，保留可回滚的历史版本
 #   2. 自动建表：集合不存在时自动创建Schema和向量索引，无需手动初始化
 #   3. 数据校验：前置校验切片有效性、向量字段完整性，避免脏数据入库
 #   4. 主键回填：将Milvus自增的chunk_id回填到切片，供下游业务使用
@@ -31,7 +31,7 @@ def node_import_milvus(state: Dict[str, Any]) -> Dict[str, Any]:
     执行流程（串行执行，一步一校验，保证数据一致性）：
         1. 输入校验：验证切片有效性、向量字段完整性，提取向量维度
         2. 环境准备：连接Milvus，集合不存在则自动创建Schema+索引
-        3. 幂等清理：删除同item_name旧数据，避免重复存储
+        3. 幂等清理：删除同revision_id旧数据，避免任务重试重复存储
         4. 批量插入：预处理数据后批量入库，回填Milvus自增chunk_id
         5. 状态更新：将回填了chunk_id的切片更新回全局状态，供下游使用
     参数：
@@ -56,7 +56,7 @@ def node_import_milvus(state: Dict[str, Any]) -> Dict[str, Any]:
         chunks_json_data, vector_dimension = step_1_check_input(state)
         # 步骤2：Milvus客户端连接+集合准备（自动建表）
         client = step_2_prepare_collection(vector_dimension)
-        # 步骤3：幂等性处理 - 清理同item_name旧数据
+        # 步骤3：幂等性处理 - 只清理同一个revision，历史版本继续保留
         step_3_clean_old_data(client, chunks_json_data)
         # 步骤4：批量插入数据+主键chunk_id回填
         updated_chunks = step_4_insert_data(client, chunks_json_data)
@@ -131,6 +131,18 @@ def create_collection(client, collection_name: str, vector_dimension: int):
     schema.add_field(field_name="file_title", datatype=DataType.VARCHAR, max_length=65535)  # 源文件标题
     schema.add_field(field_name="item_name", datatype=DataType.VARCHAR, max_length=65535)  # 商品名称（幂等性依据）
     schema.add_field(field_name="tenant_id", datatype=DataType.VARCHAR, max_length=64)
+    schema.add_field(field_name="document_id", datatype=DataType.VARCHAR, max_length=128)
+    schema.add_field(field_name="revision_id", datatype=DataType.VARCHAR, max_length=128)
+    schema.add_field(field_name="version_label", datatype=DataType.VARCHAR, max_length=64)
+    schema.add_field(field_name="trust_level", datatype=DataType.VARCHAR, max_length=32)
+    schema.add_field(field_name="device_model", datatype=DataType.VARCHAR, max_length=128)
+    schema.add_field(field_name="software_version", datatype=DataType.VARCHAR, max_length=128)
+    schema.add_field(field_name="firmware_version", datatype=DataType.VARCHAR, max_length=128)
+    schema.add_field(field_name="hardware_revision", datatype=DataType.VARCHAR, max_length=128)
+    schema.add_field(field_name="site_id", datatype=DataType.VARCHAR, max_length=128)
+    schema.add_field(field_name="page_start", datatype=DataType.INT32, nullable=True)
+    schema.add_field(field_name="page_end", datatype=DataType.INT32, nullable=True)
+    schema.add_field(field_name="governance_managed", datatype=DataType.BOOL)
     schema.add_field(field_name="sparse_vector", datatype=DataType.SPARSE_FLOAT_VECTOR)  # 稀疏向量
     schema.add_field(field_name="dense_vector", datatype=DataType.FLOAT_VECTOR, dim=vector_dimension)  # 稠密向量
     # 对于 BGE-M3 模型 ：
@@ -208,7 +220,10 @@ def step_2_prepare_collection(vector_dimension: int):
 
 def step_3_clean_old_data(client, chunks_json_data: List[Dict[str, Any]]):
     """
-    步骤3：幂等性处理 - 基于item_name清理旧数据
+    步骤3：幂等性处理 - 只清理同一个不可变revision的旧数据。
+
+    旧实现按item_name删除，会在导入新版本时把全部历史版本一起删除，无法支持发布、回滚和审计。
+    新实现让不同revision并存，查询阶段再由MongoDB治理注册表过滤出当前生效版本。
     核心设计：
         插入新数据前删除同item_name的所有旧切片，确保多次执行仅保留最新数据
         支持多item_name批量清理，自动去重避免重复操作
@@ -216,28 +231,36 @@ def step_3_clean_old_data(client, chunks_json_data: List[Dict[str, Any]]):
         client - MilvusClient实例
         chunks_json_data: List[Dict[str, Any]] - 待入库的切片列表
     """
-    # 提取并去重item_name，避免重复清理同一商品数据
-    # - 顺序 ：先循环 ( for ) -> 再判断 ( if ) -> 最后产出 ( name )。
-    # - 海象操作符 ( := ) 的作用 ：它在第 ② 步判断的时候，顺手把处理好的字符串塞进了 name 变量里。如果 name 是空字符串 ""
-    # （在 Python 里等同于 False）， if 条件不成立，第 ③ 步就不会执行，这个空值就被扔掉了。
-    item_names = sorted(
-    {   name  # ③ 最后一步：如果没被 if 拦住，把 name 丢进篮子里
-        for x in chunks_json_data or []  # ① 第一步：开始循环，拿到 x
-        if (name := str(x.get("item_name", "")).strip())  # ② 第二步：提取 -> 去空格 -> 赋值给 name -> 判断 name 是否为空
-    })
-
-    # 无有效item_name则跳过清理
-    if not item_names:
-        logger.warning("Milvus幂等性清理跳过：切片中无有效item_name")
+    revision_ids = sorted(
+        {
+            revision_id
+            for chunk in chunks_json_data or []
+            if (revision_id := str(chunk.get("revision_id") or "").strip())
+        }
+    )
+    if not revision_ids:
+        logger.warning("Milvus幂等性清理跳过：切片中无revision_id")
         return
-    # 多item_name提示日志
-    if len(item_names) > 1:
-        logger.warning(f"Milvus幂等性清理：本次检测到多个item_name，将逐个清理：{item_names}")
+    tenant_id = str(chunks_json_data[0].get("tenant_id") or "local")
+    for revision_id in revision_ids:
+        _clear_chunks_by_revision(client, CHUNKS_COLLECTION_NAME, revision_id, tenant_id)
 
-    # 遍历item_name，逐个清理旧数据
-    for i_name in item_names:
-        tenant_id = str(chunks_json_data[0].get("tenant_id") or "local")
-        _clear_chunks_by_item_name(client, CHUNKS_COLLECTION_NAME, i_name, tenant_id)
+
+def _clear_chunks_by_revision(client, collection_name: str, revision_id: str, tenant_id: str = "local"):
+    """删除同一租户、同一revision的旧切片，供失败重试或任务恢复幂等写入。"""
+    safe_revision_id = escape_milvus_string(str(revision_id or "").strip())
+    if not safe_revision_id or not collection_name:
+        return
+    if not client.has_collection(collection_name=collection_name):
+        return
+    filter_expr = tenant_filter(tenant_id, f'revision_id == "{safe_revision_id}"')
+    client.delete(collection_name=collection_name, filter=filter_expr)
+    if hasattr(client, "flush"):
+        try:
+            client.flush(collection_name=collection_name)
+        except Exception as exc:
+            logger.warning(f"Milvus revision清理flush失败，不影响主流程：{exc}")
+    logger.info(f"Milvus revision幂等清理完成：revision_id={revision_id}")
 
 
 def _clear_chunks_by_item_name(client, collection_name: str, item_name: str, tenant_id: str = "local"):

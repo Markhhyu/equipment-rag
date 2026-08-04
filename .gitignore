@@ -8,7 +8,6 @@ pytest-cache-files-*/
 .ruff_cache/
 .coverage
 htmlcov/
-.python-version
 milvus-full.log
 build/
 frontend/node_modules/

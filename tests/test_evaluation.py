@@ -55,6 +55,19 @@ def test_missing_optional_runtime_metadata_is_not_faked():
     assert metrics.latency_pass is None
 
 
+def test_human_review_policy_is_scored():
+    case = make_case(must_review=True)
+    prediction = Prediction(
+        case_id="case-1",
+        answer="当前证据不足，请由设备工程师确认。",
+        requires_human_review=True,
+    )
+
+    metrics = score_case(case, prediction)
+
+    assert metrics.human_review_pass == 1.0
+
+
 def test_critical_metric_failure_fails_case_even_when_average_is_high():
     case = make_case()
     prediction = Prediction(

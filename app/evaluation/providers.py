@@ -42,5 +42,6 @@ class QueryApiProvider:
             latency_ms=latency_ms,
             retrieved_source_ids=retrieved_source_ids,
             clarified=payload.get("clarified"),
+            requires_human_review=payload.get("requires_human_review"),
             trace_id=str(payload.get("trace_id") or "") or None,
         )

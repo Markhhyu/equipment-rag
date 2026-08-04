@@ -38,6 +38,7 @@ class ImageAssetMongoTool:
         # 文档与状态索引用于后台任务扫描；image_id唯一索引用于保证导入重试不会产生重复记录。
         self.collection.create_index([("document_id", ASCENDING), ("visual_status", ASCENDING)])
         self.collection.create_index([("tenant_id", ASCENDING), ("document_id", ASCENDING)])
+        self.collection.create_index([("tenant_id", ASCENDING), ("revision_id", ASCENDING)])
         self.collection.create_index([("tenant_id", ASCENDING), ("object_uri", ASCENDING)])
         self.collection.create_index([("image_id", ASCENDING)], unique=True)
         self.collection.create_index([("content_hash", ASCENDING)], sparse=True)
@@ -198,6 +199,36 @@ class ImageAssetMongoTool:
             "is_finished": total > 0 and finished == total,
         }
 
+    def get_revision_progress(self, revision_id: str) -> Dict:
+        """按不可变版本编号统计图片进度；旧资产没有revision_id时回退document_id。"""
+        match = {
+            "$or": [
+                {"revision_id": revision_id},
+                {"revision_id": {"$exists": False}, "document_id": revision_id},
+            ]
+        }
+        pipeline = [
+            {"$match": match},
+            {"$group": {"_id": "$visual_status", "count": {"$sum": 1}}},
+        ]
+        counts = {
+            str(item.get("_id") or "unknown"): int(item.get("count") or 0)
+            for item in self.collection.aggregate(pipeline)
+        }
+        total = sum(counts.values())
+        finished = counts.get("completed", 0) + counts.get("skipped", 0) + counts.get("failed", 0)
+        return {
+            "revision_id": revision_id,
+            "total": total,
+            "finished": finished,
+            "pending": counts.get("pending", 0),
+            "processing": counts.get("processing", 0),
+            "completed": counts.get("completed", 0),
+            "skipped": counts.get("skipped", 0),
+            "failed": counts.get("failed", 0),
+            "is_finished": total > 0 and finished == total,
+        }
+
     def get_assets_by_object_uris(self, tenant_id: str, object_uris: List[str]) -> List[Dict]:
         """
         按租户和MinIO对象地址批量查询图片资产，并保持传入地址的原始顺序。
@@ -222,6 +253,14 @@ class ImageAssetMongoTool:
             "image_id": 1,
             "tenant_id": 1,
             "document_id": 1,
+            "revision_id": 1,
+            "version_label": 1,
+            "device_model": 1,
+            "software_version": 1,
+            "firmware_version": 1,
+            "hardware_revision": 1,
+            "site_id": 1,
+            "asset_ids": 1,
             "document_name": 1,
             "filename": 1,
             "object_uri": 1,
@@ -249,6 +288,14 @@ class ImageAssetMongoTool:
         """按租户和文档查询图片资产，返回顺序优先按页码排列。"""
         return list(
             self.collection.find({"tenant_id": tenant_id, "document_id": document_id}, {"_id": 0})
+            .sort([("page_number", ASCENDING), ("filename", ASCENDING)])
+            .limit(max(int(limit or 0), 0))
+        )
+
+    def list_revision_assets(self, tenant_id: str, revision_id: str, limit: int = 200) -> List[Dict]:
+        """按不可变版本读取图片，避免同型号不同软件版本之间串图。"""
+        return list(
+            self.collection.find({"tenant_id": tenant_id, "revision_id": revision_id}, {"_id": 0})
             .sort([("page_number", ASCENDING), ("filename", ASCENDING)])
             .limit(max(int(limit or 0), 0))
         )

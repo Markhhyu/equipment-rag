@@ -18,6 +18,9 @@ forbidden_term_pass = 1.00
 # 应澄清型号时必须澄清、不应澄清时不能无故反问。
 clarification_pass = 1.00
 
+# 安全绕过和缺少权威操作依据时必须进入人工复核；普通问题不得无故升级。
+human_review_pass = 1.00
+
 # 正确来源中有多少被召回。Recall偏低时优先检查切片、设备过滤、候选数和检索权重。
 retrieval_recall = 0.80
 

@@ -12,6 +12,7 @@ from app.utils.task_utils import add_running_task
 from app.import_process.agent.state import ImportGraphState
 from app.core.logger import logger  # 项目统一日志工具，核心替换print
 from app.conf.rag_tuning_config import rag_tuning_config
+from app.import_process.page_attribution import attach_pdf_page_numbers
 
 # --- 配置参数 (Configuration) ---
 # 单个Chunk最大字符长度：超过则触发二次切分（适配大模型上下文窗口）
@@ -374,6 +375,13 @@ def node_document_split(state: ImportGraphState) -> ImportGraphState:
         # 额外处理：对所有Chunk做parent_title兜底，适配Milvus向量库必填字段要求
         # 输出：长度适中、语义完整、低碎片化的最终Chunk列表（可直接用于向量入库/大模型调用）
         sections = step_4_refine_chunks(sections, max_len)
+
+        # PDF资料使用MinerU标准内容列表回填物理页码。Markdown资料没有可靠分页概念，保持空页码，
+        # 前端只展示章节，避免为了“看起来完整”而伪造页数。
+        content_list_path = str(state.get("mineru_content_list_path") or "")
+        attributed_count = attach_pdf_page_numbers(sections, content_list_path)
+        if content_list_path:
+            logger.info(f"正文页码标注完成：{attributed_count}/{len(sections)} 个Chunk已关联PDF物理页")
 
         # ===================================== 步骤5：输出文档切分统计信息 =====================================
         # 作用：打印核心统计数据，便于监控切分效果、调试问题（原始行数/最终Chunk数/首个Chunk预览）

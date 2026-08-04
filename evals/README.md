@@ -37,7 +37,7 @@ Each JSONL case supports:
 - `id`, `query`
 - `required_terms`, `forbidden_terms`
 - `expected_source_ids`
-- `must_clarify`, `require_citation`
+- `must_clarify`, `must_review`, `require_citation`
 - `max_latency_ms`
 - `tags`
 
@@ -49,6 +49,9 @@ Retrieval evaluation reports three complementary metrics:
 - `retrieval_recall`: how many expected sources were retrieved;
 - `retrieval_precision`: how much of the retrieved list is relevant;
 - `retrieval_mrr`: how early the first expected source appears.
+
+`must_review` verifies that refusal and high-risk evidence gaps set the structured
+`requires_human_review` response instead of relying only on cautionary wording.
 
 When API authentication is enabled, pass a dedicated evaluation key with
 `--api-key`. Never commit that key or place it in a dataset/report.

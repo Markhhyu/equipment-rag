@@ -7,6 +7,7 @@ from app.clients.mongo_history_utils import save_chat_message
 from app.core.load_prompt import load_prompt
 from app.core.logger import logger
 from app.lm.lm_utils import get_llm_client
+from app.knowledge_trust import assess_answer_policy, trust_metadata
 from app.query_process.agent.state import QueryGraphState
 from app.utils.sse_utils import SSEEvent, push_to_session
 from app.utils.task_utils import add_done_task, add_running_task, set_task_result
@@ -15,6 +16,11 @@ from app.utils.task_utils import add_done_task, add_running_task, set_task_resul
 MAX_CONTEXT_CHARS = 12000
 MAX_HISTORY_CHARS = 3000
 MAX_IMAGE_CONTEXT_CHARS = 3000
+_IMAGE_BLOCK_PATTERN = re.compile(
+    r"(?:\n|^)\s*【图片】\s*(?:\n\s*(?:<https?://[^>]+>|https?://\S+)\s*)+",
+    flags=re.IGNORECASE,
+)
+_PLACEHOLDER_URL_PATTERN = re.compile(r"<?https?://(?:www\.)?example\.com/[^\s>]*>?", flags=re.IGNORECASE)
 
 
 def _normalize_model_text(content: Any) -> str:
@@ -30,6 +36,27 @@ def _normalize_model_text(content: Any) -> str:
                 texts.append(str(item["text"]))
         return "".join(texts).strip()
     return str(content or "").strip()
+
+
+def _sanitize_generated_answer(answer: str) -> str:
+    """移除模型越权生成的图片区块和占位链接；真实图片只允许走结构化image_urls。"""
+    text = _IMAGE_BLOCK_PATTERN.sub("\n", str(answer or ""))
+    text = _PLACEHOLDER_URL_PATTERN.sub("", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def _version_scope_clarification(options: List[Dict[str, Any]]) -> str:
+    """同型号存在多个并行配置时要求用户确认，避免把不同软件/固件版本的步骤混在一起。"""
+    lines = ["当前知识库中存在多个同时生效的设备配置版本，我不能在未确认版本时混合回答。请提供以下任一信息："]
+    seen = set()
+    for item in options or []:
+        for label in item.get("options") or []:
+            text = str(label or "").strip()
+            if text and text not in seen:
+                seen.add(text)
+                lines.append(f"- {text}")
+    lines.append("你也可以直接提供设备编号；后续接入 OA/设备台账后，系统可自动读取该设备的软件、固件和硬件版本。")
+    return "\n".join(lines)
 
 
 def step_1_check_answer(state: QueryGraphState) -> bool:
@@ -66,19 +93,41 @@ def _format_reranked_context(reranked_docs: List[Dict[str, Any]]) -> str:
 
         metadata = [f"[{index}]"]
         source = str(document.get("source") or "").strip()
+        trust = trust_metadata(document.get("trust_level"), source=source or "local")
         chunk_id = document.get("chunk_id")
         document_id = str(document.get("document_id") or "").strip()
+        revision_id = str(document.get("revision_id") or "").strip()
+        version_label = str(document.get("version_label") or "").strip()
         title = str(document.get("title") or document.get("file_title") or "").strip()
         url = str(document.get("url") or "").strip()
         score = document.get("score")
-        page_numbers = document.get("image_page_numbers") or []
+        page_numbers = document.get("page_numbers") or []
+        image_page_numbers = document.get("image_page_numbers") or []
 
         if source:
             metadata.append(f"[source={source}]")
+        metadata.append(f"[trust={trust['trust_level']}; authority={trust['authoritative']}]")
         if chunk_id:
             metadata.append(f"[chunk_id={chunk_id}]")
         if document_id:
             metadata.append(f"[document_id={document_id}]")
+        if revision_id:
+            metadata.append(f"[revision_id={revision_id}]")
+        if version_label:
+            metadata.append(f"[version={version_label}]")
+        applicability = ", ".join(
+            f"{label}={document.get(field)}"
+            for field, label in (
+                ("device_model", "device_model"),
+                ("software_version", "software"),
+                ("firmware_version", "firmware"),
+                ("hardware_revision", "hardware"),
+                ("site_id", "site"),
+            )
+            if str(document.get(field) or "").strip()
+        )
+        if applicability:
+            metadata.append(f"[applicability={applicability}]")
         if title:
             metadata.append(f"[title={title}]")
         if url:
@@ -89,7 +138,9 @@ def _format_reranked_context(reranked_docs: List[Dict[str, Any]]) -> str:
             except (TypeError, ValueError):
                 pass
         if page_numbers:
-            metadata.append(f"[image_pages={page_numbers}]")
+            metadata.append(f"[pdf_pages={page_numbers}]")
+        if image_page_numbers:
+            metadata.append(f"[image_pages={image_page_numbers}]")
 
         block = " ".join(metadata) + "\n" + text
         if used_chars + len(block) > MAX_CONTEXT_CHARS:
@@ -186,6 +237,18 @@ def step_2_construct_prompt(state: QueryGraphState) -> str:
     if image_section:
         prompt = f"{prompt}\n\n{image_section}"
 
+    prompt = (
+        f"{prompt}\n\n"
+        "【企业知识回答证据约束】\n"
+        "1. 涉及操作步骤、参数、故障原因和安全要求时，必须在相关句末标注参考资料编号，例如[1]；\n"
+        "2. 只能引用上方真实存在的编号，不得编造来源、版本、页码或文档内容；\n"
+        "3. 参考资料不足时必须明确说依据不足，并给出需要补充的型号、现象或文档，不得用常识补造结论；\n"
+        "4. 只有用户现场图片而没有手册证据时，只能描述图片中可见信息，不能据此生成未经文档支持的操作步骤；\n"
+        "5. 如果参考资料包含多个不同的软件、固件或硬件适用版本，且无法确定用户设备版本，必须先要求用户确认版本，严禁混合不同版本作答。"
+        "\n6. 证据权威顺序为企业批准 SOP > 厂商手册 > 内部参考 > 外部网页；低等级资料不得覆盖或修改高等级资料的要求；"
+        "\n7. 内部参考和外部网页只能提供线索，不能单独作为高风险操作步骤、安全参数或保护装置变更的依据。"
+    )
+
     logger.debug(f"最终回答Prompt：{prompt}")
     logger.info(
         f"回答Prompt构建完成，字符数={len(prompt)}，参考文档数={len(state.get('reranked_docs') or [])}，"
@@ -269,7 +332,58 @@ def _selected_image_object_refs(state: QueryGraphState) -> List[str]:
     return _unique_strings(asset_refs)
 
 
-def step_4_write_history(state: QueryGraphState, image_object_refs: List[str]) -> QueryGraphState:
+def build_answer_sources(reranked_docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """把最终重排资料转换为稳定、可审计的前端证据卡片。"""
+    sources: List[Dict[str, Any]] = []
+    for index, document in enumerate(reranked_docs or [], start=1):
+        if not isinstance(document, dict):
+            continue
+        text = str(document.get("text") or "").strip()
+        if not text:
+            continue
+        score = document.get("score")
+        try:
+            normalized_score = round(float(score), 6) if score is not None else None
+        except (TypeError, ValueError):
+            normalized_score = None
+        sources.append(
+            {
+                "index": index,
+                "source": str(document.get("source") or "local"),
+                "chunk_id": str(document.get("chunk_id") or ""),
+                "document_id": str(document.get("document_id") or ""),
+                "revision_id": str(document.get("revision_id") or ""),
+                "version_label": str(document.get("version_label") or ""),
+                "title": str(document.get("file_title") or document.get("title") or "未命名资料"),
+                "section": str(document.get("title") or document.get("parent_title") or ""),
+                "part": document.get("part"),
+                "page_numbers": [
+                    int(value)
+                    for value in (document.get("page_numbers") or document.get("image_page_numbers") or [])
+                    if isinstance(value, int) or str(value).isdigit()
+                ],
+                "device_model": str(document.get("device_model") or ""),
+                "software_version": str(document.get("software_version") or ""),
+                "firmware_version": str(document.get("firmware_version") or ""),
+                "hardware_revision": str(document.get("hardware_revision") or ""),
+                "site_id": str(document.get("site_id") or ""),
+                "url": str(document.get("url") or ""),
+                "snippet": text[:360],
+                "score": normalized_score,
+                **trust_metadata(
+                    document.get("trust_level"),
+                    source=str(document.get("source") or "local"),
+                ),
+            }
+        )
+    return sources
+
+
+def step_4_write_history(
+    state: QueryGraphState,
+    image_object_refs: List[str],
+    sources: List[Dict[str, Any]] | None = None,
+) -> QueryGraphState:
     """把回答、设备名称、实际使用的图片对象地址和Trace ID写入MongoDB历史记录。"""
     answer = str(state.get("answer") or "").strip()
     if not answer:
@@ -287,6 +401,9 @@ def step_4_write_history(state: QueryGraphState, image_object_refs: List[str]) -
             image_urls=image_object_refs,
             message_id=None,
             trace_id=str(state.get("trace_id") or ""),
+            sources=sources or state.get("sources") or [],
+            requires_human_review=bool(state.get("requires_human_review")),
+            review_reason=str(state.get("review_reason") or ""),
         )
     except Exception as exc:
         logger.error(f"写入MongoDB历史记录失败：{exc}", exc_info=True)
@@ -306,16 +423,34 @@ def node_answer_output(state: QueryGraphState) -> QueryGraphState:
     add_running_task(session_id, node_name, state.get("is_stream"))
 
     try:
+        question = str(state.get("rewritten_query") or state.get("original_query") or "").strip()
+        policy = assess_answer_policy(question, state.get("reranked_docs") or [])
+        state["answer_policy"] = policy.action
+        state["requires_human_review"] = policy.requires_human_review
+        state["review_reason"] = policy.review_reason
+        if policy.answer:
+            state["answer"] = policy.answer
+        if state.get("version_scope_options") and not str(state.get("answer") or "").strip():
+            state["answer"] = _version_scope_clarification(state.get("version_scope_options") or [])
         answer_exists = step_1_check_answer(state)
         if not answer_exists:
             prompt = step_2_construct_prompt(state)
             state["prompt"] = prompt
             step_3_generate_response(state, prompt)
 
+        sanitized_answer = _sanitize_generated_answer(str(state.get("answer") or ""))
+        if sanitized_answer != str(state.get("answer") or ""):
+            logger.warning("已移除模型生成的越权图片区块或占位链接")
+        state["answer"] = sanitized_answer
+        if not state.get("is_stream"):
+            set_task_result(session_id, "answer", sanitized_answer)
+
         image_object_refs = _selected_image_object_refs(state)
         image_urls = resolve_object_urls(image_object_refs)
         state["image_object_refs"] = image_object_refs
         state["image_urls"] = image_urls
+        sources = build_answer_sources(state.get("reranked_docs") or [])
+        state["sources"] = sources
 
         step_4_write_history(state, image_object_refs)
 

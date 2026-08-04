@@ -684,6 +684,7 @@ try {
     Write-Host " 所有已选服务启动成功" -ForegroundColor Green
     Write-Host "==============================================" -ForegroundColor Green
     Write-Host "导入页面：          http://127.0.0.1:$importPort/import.html"
+    Write-Host "知识库治理：        http://127.0.0.1:$importPort/knowledge.html"
     Write-Host "聊天页面：          http://127.0.0.1:$queryPort/chat.html"
     Write-Host "导入 API 文档：     http://127.0.0.1:$importPort/docs"
     Write-Host "查询 API 文档：     http://127.0.0.1:$queryPort/docs"

@@ -33,6 +33,10 @@ SPATIAL_OBJECT_PATTERN = re.compile(
     r"|(?:在哪|哪里|位置|哪个|哪一个)"
     r".{0,12}(?:按钮|按键|开关|旋钮|接口|端口|插口|插槽|部件|零件|指示灯|传感器|接头)"
 )
+OPERATION_IMAGE_PATTERN = re.compile(
+    r"怎么(?:用|使用|操作|安装|拆|换)|如何(?:使用|操作|安装|拆卸|更换|维护|开机|关机|设置)|"
+    r"使用方法|操作步骤|安装步骤|拆卸步骤|更换步骤|开机流程|关机流程"
+)
 MINIO_MARKDOWN_IMAGE_PATTERN = re.compile(r"!\[[^\]]*\]\((minio://[^)]+)\)")
 
 
@@ -42,6 +46,12 @@ def is_visual_question(question: str) -> bool:
     if not normalized_question:
         return False
     return bool(EXPLICIT_VISUAL_PATTERN.search(normalized_question) or SPATIAL_OBJECT_PATTERN.search(normalized_question))
+
+
+def should_display_document_images(question: str) -> bool:
+    """操作类问题即使不调用视觉模型，也应展示证据页附近的手册图片。"""
+    normalized_question = re.sub(r"\s+", "", str(question or "")).lower()
+    return bool(normalized_question and (is_visual_question(normalized_question) or OPERATION_IMAGE_PATTERN.search(normalized_question)))
 
 
 def _normalize_string_list(value: Any) -> List[str]:
@@ -114,6 +124,63 @@ def _load_candidate_assets(tenant_id: str, object_uris: List[str]) -> List[Dict[
         if isinstance(asset, dict) and asset.get("object_uri")
     }
     return [asset_by_uri.get(object_uri) or _build_fallback_asset(object_uri) for object_uri in object_uris]
+
+
+def _nearby_document_assets(
+    tenant_id: str,
+    reranked_docs: List[Dict[str, Any]],
+    limit: int,
+) -> List[Dict[str, Any]]:
+    """按正文证据页、相邻页选择图片；版本优先，避免同型号不同软件版本之间串图。"""
+    if limit <= 0:
+        return []
+    tool = get_image_asset_tool()
+    selected: List[Dict[str, Any]] = []
+    seen_uris = set()
+    for document in reranked_docs or []:
+        if not isinstance(document, dict) or str(document.get("source") or "local") != "local":
+            continue
+        document_id = str(document.get("document_id") or "").strip()
+        revision_id = str(document.get("revision_id") or "").strip()
+        if not document_id:
+            continue
+        try:
+            assets = (
+                tool.list_revision_assets(tenant_id, revision_id, 200)
+                if revision_id
+                else tool.list_document_assets(tenant_id, document_id, 200)
+            )
+        except Exception as exc:
+            logger.warning(f"读取证据页附近图片失败：document_id={document_id}，原因={exc}")
+            continue
+
+        evidence_pages = [
+            int(value)
+            for value in (document.get("page_numbers") or document.get("image_page_numbers") or [])
+            if isinstance(value, int) or str(value).isdigit()
+        ]
+        if evidence_pages:
+            assets.sort(
+                key=lambda asset: (
+                    min(abs(int(asset.get("page_number") or 10**9) - page) for page in evidence_pages),
+                    int(asset.get("page_number") or 10**9),
+                )
+            )
+            assets = [
+                asset
+                for asset in assets
+                if isinstance(asset.get("page_number"), int)
+                and min(abs(asset["page_number"] - page) for page in evidence_pages) <= 1
+            ]
+        for asset in assets:
+            object_uri = str(asset.get("object_uri") or "").strip()
+            if not object_uri or object_uri in seen_uris:
+                continue
+            seen_uris.add(object_uri)
+            selected.append(asset)
+            if len(selected) >= limit:
+                return selected
+    return selected
 
 
 def _best_cached_description(asset: Dict[str, Any]) -> str:
@@ -329,6 +396,8 @@ def node_image_reasoning(state: QueryGraphState) -> Dict[str, Any]:
         question = str(state.get("rewritten_query") or state.get("original_query") or "").strip()
         user_image_refs = _normalize_string_list(state.get("user_image_refs"))
         need_visual_reasoning = bool(user_image_refs) or is_visual_question(question)
+        display_document_images = should_display_document_images(question)
+        tenant_id = str(state.get("tenant_id") or "local")
 
         with start_rag_observation(
             as_type="span",
@@ -345,7 +414,7 @@ def node_image_reasoning(state: QueryGraphState) -> Dict[str, Any]:
                 "vision_enabled": image_processing_config.query_vision_enabled,
             },
         ) as selection_observation:
-            if not need_visual_reasoning:
+            if not need_visual_reasoning and not display_document_images:
                 _update_selection_observation(
                     selection_observation,
                     status="not_required",
@@ -366,6 +435,22 @@ def node_image_reasoning(state: QueryGraphState) -> Dict[str, Any]:
             selected_user_uris = user_image_refs[: image_processing_config.query_image_top_k]
             remaining_slots = max(0, image_processing_config.query_image_top_k - len(selected_user_uris))
             selected_document_uris = candidate_uris[:remaining_slots]
+            selected_document_assets = _load_candidate_assets(tenant_id, selected_document_uris)
+            if len(selected_document_assets) < remaining_slots:
+                nearby_assets = _nearby_document_assets(
+                    tenant_id,
+                    state.get("reranked_docs") or [],
+                    remaining_slots - len(selected_document_assets),
+                )
+                existing_uris = {str(asset.get("object_uri") or "") for asset in selected_document_assets}
+                selected_document_assets.extend(
+                    asset for asset in nearby_assets if str(asset.get("object_uri") or "") not in existing_uris
+                )
+                selected_document_uris = [
+                    str(asset.get("object_uri") or "")
+                    for asset in selected_document_assets
+                    if asset.get("object_uri")
+                ]
             selected_uris = [*selected_user_uris, *selected_document_uris]
             if not selected_uris:
                 _update_selection_observation(
@@ -376,19 +461,18 @@ def node_image_reasoning(state: QueryGraphState) -> Dict[str, Any]:
                 )
                 logger.info("当前问题需要图片信息，但重排后的Chunk没有关联图片")
                 return {
-                    "need_visual_reasoning": True,
+                    "need_visual_reasoning": need_visual_reasoning,
                     "image_reasoning_status": "no_candidate_images",
                     "image_assets": [],
                     "image_analysis_context": "",
                     "image_reasoning_object_uris": [],
                 }
 
-            tenant_id = str(state.get("tenant_id") or "local")
             selected_assets = [
                 _build_session_attachment_asset(object_uri)
                 for object_uri in selected_user_uris
             ]
-            selected_assets.extend(_load_candidate_assets(tenant_id, selected_document_uris))
+            selected_assets.extend(selected_document_assets)
             _update_selection_observation(
                 selection_observation,
                 status="selected",
@@ -397,6 +481,15 @@ def node_image_reasoning(state: QueryGraphState) -> Dict[str, Any]:
             )
 
         cached_context = _build_cached_context(selected_assets)
+        if not need_visual_reasoning:
+            logger.info(f"普通操作问题展示证据页附近图片：{len(selected_document_uris)}张")
+            return {
+                "need_visual_reasoning": False,
+                "image_reasoning_status": "display_only",
+                "image_assets": selected_document_assets,
+                "image_analysis_context": "",
+                "image_reasoning_object_uris": selected_document_uris,
+            }
         if not image_processing_config.query_vision_enabled:
             logger.info("查询阶段视觉模型已关闭，使用后台缓存图片说明继续回答")
             return {

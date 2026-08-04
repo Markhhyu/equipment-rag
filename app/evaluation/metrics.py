@@ -9,6 +9,7 @@ from app.evaluation.models import EvalCase, Prediction
 
 _CITATION_PATTERN = re.compile(r"(?:https?://\S+|\[(?:\d+|source|chunk)[^\]]*\])", re.IGNORECASE)
 _CLARIFICATION_TERMS = ("请提供", "请确认", "型号", "设备名称", "which model", "please provide", "please confirm")
+_HUMAN_REVIEW_TERMS = ("人工复核", "安全负责人", "设备工程师确认", "现场评估", "human review")
 
 
 def normalize_text(value: str) -> str:
@@ -25,12 +26,18 @@ def infer_clarification(answer: str) -> bool:
     return any(normalize_text(term) in normalized for term in _CLARIFICATION_TERMS)
 
 
+def infer_human_review(answer: str) -> bool:
+    normalized = normalize_text(answer)
+    return any(normalize_text(term) in normalized for term in _HUMAN_REVIEW_TERMS)
+
+
 @dataclass(frozen=True)
 class CaseMetrics:
     answer_present: float
     keyword_coverage: float
     forbidden_term_pass: float
     clarification_pass: float
+    human_review_pass: float
     retrieval_recall: float | None
     retrieval_precision: float | None
     retrieval_mrr: float | None
@@ -45,6 +52,7 @@ class CaseMetrics:
                 self.keyword_coverage,
                 self.forbidden_term_pass,
                 self.clarification_pass,
+                self.human_review_pass,
                 self.retrieval_recall,
                 self.retrieval_precision,
                 self.retrieval_mrr,
@@ -64,6 +72,9 @@ def score_case(case: EvalCase, prediction: Prediction) -> CaseMetrics:
     clarified = prediction.clarified
     if clarified is None:
         clarified = infer_clarification(prediction.answer)
+    requires_human_review = prediction.requires_human_review
+    if requires_human_review is None:
+        requires_human_review = infer_human_review(prediction.answer)
 
     retrieval_recall = None
     retrieval_precision = None
@@ -102,6 +113,7 @@ def score_case(case: EvalCase, prediction: Prediction) -> CaseMetrics:
         keyword_coverage=_ratio(required_matches, len(case.required_terms)),
         forbidden_term_pass=float(forbidden_matches == 0),
         clarification_pass=float(clarified == case.must_clarify),
+        human_review_pass=float(requires_human_review == case.must_review),
         retrieval_recall=retrieval_recall,
         retrieval_precision=retrieval_precision,
         retrieval_mrr=retrieval_mrr,

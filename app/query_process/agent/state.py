@@ -49,6 +49,12 @@ class QueryGraphState(TypedDict, total=False):
     # 这两个字段必须声明在LangGraph状态中，否则节点内虽然生成成功，合并状态时仍会被丢弃。
     image_object_refs: List[str]
     image_urls: List[str]
+    version_scope_options: List[Dict[str, Any]]
+    # 最终回答使用的结构化证据，供API和前端展示文档版本、章节与原文片段。
+    sources: List[Dict[str, Any]]
+    answer_policy: str
+    requires_human_review: bool
+    review_reason: str
     image_reasoning_error: str
 
     # 最终生成结果。

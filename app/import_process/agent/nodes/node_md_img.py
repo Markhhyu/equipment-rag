@@ -297,7 +297,9 @@ def node_md_img(state: ImportGraphState) -> ImportGraphState:
         return state
 
     tenant_id = str(state.get("tenant_id") or "local")
-    document_id = str(state.get("task_id") or md_path.stem)
+    revision_id = str(state.get("revision_id") or state.get("task_id") or md_path.stem)
+    document_id = str(state.get("document_id") or revision_id)
+    version_label = str(state.get("version_label") or "legacy-v1")
     document_name = _safe_path_segment(str(state.get("file_title") or md_path.stem))
     structured_metadata = _load_structured_metadata(state)
     replacements: Dict[str, Tuple[str, str]] = {}
@@ -321,6 +323,7 @@ def node_md_img(state: ImportGraphState) -> ImportGraphState:
                 minio_config.minio_img_dir,
                 document_name,
                 document_id,
+                revision_id,
                 filename,
             )
             object_uri = _upload_image(minio_client, image_path, object_name)
@@ -329,12 +332,21 @@ def node_md_img(state: ImportGraphState) -> ImportGraphState:
                 pending_count += 1
 
             image_id = hashlib.sha256(
-                f"{tenant_id}|{document_id}|{filename}|{content_hash}".encode("utf-8")
+                f"{tenant_id}|{document_id}|{revision_id}|{filename}|{content_hash}".encode("utf-8")
             ).hexdigest()
             asset = {
                 "image_id": image_id,
                 "tenant_id": tenant_id,
                 "document_id": document_id,
+                "revision_id": revision_id,
+                "version_label": version_label,
+                "trust_level": str(state.get("trust_level") or "manufacturer_manual"),
+                "device_model": str(state.get("device_model") or ""),
+                "software_version": str(state.get("software_version") or ""),
+                "firmware_version": str(state.get("firmware_version") or ""),
+                "hardware_revision": str(state.get("hardware_revision") or ""),
+                "site_id": str(state.get("site_id") or ""),
+                "asset_ids": [str(value) for value in (state.get("asset_ids") or []) if str(value).strip()],
                 "document_name": document_name,
                 "filename": filename,
                 "content_hash": content_hash,
