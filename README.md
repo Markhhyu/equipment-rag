@@ -4,10 +4,11 @@
 
 面向设备手册、SOP 与运维知识的多模态 RAG Agent
 
-基于 **LangGraph、MinerU、BGE-M3、Milvus、Reranker、MinIO、MongoDB 与 Langfuse**，提供文档导入、混合检索、型号确认、图片理解、多轮问答、流式输出、运行恢复和质量评测。
+基于 **Vue 3、FastAPI、LangGraph、MinerU、BGE-M3、Milvus、Reranker、MinIO、MongoDB 与 Langfuse**，提供文档导入、混合检索、型号确认、图片理解、多轮问答、流式输出、运行恢复和质量评测。
 
 ![Python](https://img.shields.io/badge/Python-3.14-3776AB)
 ![FastAPI](https://img.shields.io/badge/FastAPI-Service-009688)
+![Vue](https://img.shields.io/badge/Vue-3-42B883)
 ![LangGraph](https://img.shields.io/badge/LangGraph-Agent-1C3C3C)
 ![Milvus](https://img.shields.io/badge/Milvus-Hybrid_Search-00A1EA)
 ![Langfuse](https://img.shields.io/badge/Langfuse-Observability-orange)
@@ -52,6 +53,8 @@
 |---|---|
 | PDF / Markdown 导入 | PDF 使用独立 MinerU 服务解析；Markdown 可直接导入 |
 | 多模态图片链路 | 图片保存到 MinIO，可异步生成说明，并按问题返回相关手册图片 |
+| 会话图片附件 | 聊天页可上传 JPG/PNG/WebP 辅助本轮分析；附件不进入 Milvus、文档切片或长期知识库 |
+| Vue 管理页面 | Vue 3 + TypeScript 双页面，支持拖拽上传、SSE 进度、历史消息、反馈和 API Key 设置 |
 | 型号确认 | 明确型号优先精确识别；模糊名称按阈值自动确认或要求用户澄清 |
 | 混合检索 | BGE-M3 Dense + Sparse、HyDE、RRF、BGE/Qwen Reranker |
 | 多轮问答 | MongoDB 保存严格按时间排列的用户/助手消息、设备名、图片和 Trace ID |
@@ -65,6 +68,7 @@
 - Neo4j 节点已接入流程，但实际图谱查询仍是预留实现。
 - 百炼 WebSearch MCP 是可选能力；关闭或调用失败时会降级到本地知识库。
 - MinerU 只在导入 PDF 时必需，导入 Markdown 和普通问答不依赖它。
+- 聊天页图片是临时会话附件，清空会话时同步删除；要长期检索的资料应从“知识库导入”页面上传。
 - 本项目用于知识检索和辅助判断，不能替代设备安全规范、锁机挂牌流程或专业工程师确认。
 
 ---
@@ -85,6 +89,7 @@ flowchart LR
 
     subgraph Query["设备问答"]
         USER["用户问题"] --> QUERY_API["查询 API :8001"]
+        SESSION_IMAGE["当前会话图片"] --> QUERY_API
         QUERY_API --> CONFIRM["型号确认与问题改写"]
         CONFIRM --> SEARCH["普通检索 / HyDE / MCP / KG"]
         SEARCH --> RRF["RRF 融合"]
@@ -94,6 +99,7 @@ flowchart LR
     end
 
     MILVUS --> SEARCH
+    SESSION_IMAGE -. "仅本轮视觉分析，不入Milvus" .-> VISION
     QUERY_API <--> MONGO["MongoDB 历史 / 运行 / Checkpoint"]
     ANSWER --> LANGFUSE["Langfuse Trace / Score"]
     QUERY_API --> METRICS["Prometheus / Grafana"]
@@ -135,6 +141,7 @@ node_item_name_confirm
 | Docker | Docker Desktop 或 Docker Engine，支持 Compose v2 |
 | 主项目 Python | 仅本地开发需要，版本 `>=3.14,<3.15` |
 | uv | 仅本地开发或安装 MinerU 时需要 |
+| Node.js | 仅修改前端时需要，推荐 Node.js 22 LTS |
 | 内存 | 建议至少 16 GB；模型首次加载时占用会明显增加 |
 | GPU | 可选；默认配置使用 CPU，首次验证不要求 NVIDIA GPU |
 
@@ -354,11 +361,25 @@ IMAGE_ENRICHMENT_ASYNC=true
 QUERY_IMAGE_VISION_ENABLED=true
 QUERY_IMAGE_TOP_K=3
 LANGFUSE_MEDIA_UPLOAD_ENABLED=false
+CHAT_ATTACHMENT_MAX_FILES=3
+CHAT_ATTACHMENT_MAX_BYTES=10485760
+CHAT_ATTACHMENT_ALLOWED_EXTENSIONS=.jpg,.jpeg,.png,.webp
+CHAT_ATTACHMENT_ALLOWED_CONTENT_TYPES=image/jpeg,image/png,image/webp
 ```
 
 - `smart`：仅增强缺少有效图注的图片，适合日常使用。
 - `QUERY_IMAGE_TOP_K`：每次视觉问题最多分析和返回的相关图片数。
 - Langfuse 媒体上传默认关闭；Trace 仍记录图片数量、状态和定位摘要，避免上传 Base64 原图。
+- `CHAT_ATTACHMENT_*`：聊天页临时图片的数量、大小和类型限制。图片存放在当前租户与会话的私有目录，绝不会写入文档切片、Milvus 或知识库图片资产集合。
+
+#### 两类图片不要混用
+
+| 图片来源 | 生命周期 | 是否进入知识库 | 适用场景 |
+|---|---|---|---|
+| 导入页面中的 PDF/Markdown 图片 | 跟随长期文档 | 是 | 手册插图、接线图、标准操作图 |
+| 聊天页面上传的 JPG/PNG/WebP | 仅当前会话；清空会话后删除 | 否 | 现场照片、铭牌、报警界面、临时故障现象 |
+
+这样的隔离可以避免现场照片变成长期检索噪声，影响其他会话的召回与回答质量。
 
 ### RAG 调优配置
 
@@ -397,6 +418,8 @@ LJ2268 的控制面板各按钮在哪里？请结合手册图片说明。
 
 当问题只包含“打印机”“真空泵”等模糊名称时，系统可能要求确认候选设备。确认后继续使用同一个 `session_id`，系统会结合最近历史完成多轮问答。
 
+聊天页支持把现场图片直接拖入输入框，也可以只上传图片、不输入文字。图片上传后会先保存到当前会话私有目录，再把稳定的对象引用交给问答流程。点击“清空会话”或“新建会话”时，历史消息和该会话附件会一起删除，长期知识库内容不受影响。
+
 ### 3. API 示例
 
 非流式问答：
@@ -432,6 +455,8 @@ curl -N "http://127.0.0.1:8001/stream/demo-session-002"
 | `POST` | `/upload` | 上传并导入文档 |
 | `GET` | `/status/{task_id}` | 查看导入和图片增强进度 |
 | `POST` | `/query` | 发起同步或流式问答 |
+| `GET` | `/attachments/config` | 获取聊天图片数量、大小和类型限制 |
+| `POST` | `/attachments/{session_id}` | 上传仅属于当前会话的图片附件 |
 | `GET` | `/stream/{session_id}` | 订阅 SSE 流 |
 | `GET` | `/history/{session_id}` | 获取会话历史 |
 | `DELETE` | `/history/{session_id}` | 清空当前租户会话 |
@@ -538,6 +563,22 @@ uv run uvicorn app.import_process.api.file_import_service:app --host 127.0.0.1 -
 uv run uvicorn app.query_process.api.query_service:app --host 127.0.0.1 --port 8001
 ```
 
+修改 Vue 页面时，先安装依赖并启动 Vite：
+
+```powershell
+Set-Location frontend
+npm install
+npm run dev
+```
+
+生成 FastAPI 和 Docker 镜像使用的静态页面：
+
+```powershell
+npm run build
+```
+
+构建产物位于 `frontend/dist/`，不会提交到 Git。FastAPI 优先提供构建后的 Vue 页面；本地尚未构建时会回退到原来的单文件 HTML，避免后端开发被前端依赖阻塞。
+
 提交前运行一条完整质量门禁：
 
 ```powershell
@@ -577,6 +618,7 @@ equipment-rag-agent/
 │  └─ observability/           # Prometheus 与 Grafana 配置
 ├─ docs/                       # 配置、安全、运行恢复和观测文档
 ├─ evals/                      # 评测配置、数据集和示例预测
+├─ frontend/                   # Vue 3 + TypeScript 聊天页与导入页
 ├─ prompts/                    # Prompt 模板
 ├─ scripts/check.py            # 本地质量检查入口
 ├─ tests/                      # 单元与回归测试

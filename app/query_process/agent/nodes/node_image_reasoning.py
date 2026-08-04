@@ -86,6 +86,19 @@ def _build_fallback_asset(object_uri: str) -> Dict[str, Any]:
     }
 
 
+def _build_session_attachment_asset(object_uri: str) -> Dict[str, Any]:
+    """把当前会话附件转换为视觉模型输入；不会查询或写入知识库图片资产集合。"""
+    asset = _build_fallback_asset(object_uri)
+    asset.update(
+        {
+            "document_name": "当前会话上传图片",
+            "session_attachment": True,
+            "visual_status": "session_only",
+        }
+    )
+    return asset
+
+
 def _load_candidate_assets(tenant_id: str, object_uris: List[str]) -> List[Dict[str, Any]]:
     """批量加载图片资产；MongoDB异常时使用MinIO地址降级，避免阻断文本问答。"""
     if not object_uris:
@@ -114,6 +127,9 @@ def _best_cached_description(asset: Dict[str, Any]) -> str:
 
 def _format_asset_location(asset: Dict[str, Any], index: int) -> str:
     """生成稳定的图片编号、文档名和页码描述。"""
+    if asset.get("session_attachment"):
+        filename = str(asset.get("filename") or "用户图片").strip()
+        return f"图片{index}，当前会话上传的《{filename}》"
     document_name = str(asset.get("document_name") or asset.get("filename") or "未知文档").strip()
     page_number = asset.get("page_number")
     page_text = f"第{page_number}页" if isinstance(page_number, int) and page_number > 0 else "页码未知"
@@ -186,7 +202,7 @@ def _invoke_query_vision(question: str, assets: List[Dict[str, Any]]) -> Tuple[s
         {
             "type": "text",
             "text": (
-                "你正在根据设备技术手册图片回答一个具体问题。\n"
+                "你正在根据设备技术手册图片或用户在当前会话上传的设备图片回答一个具体问题。\n"
                 f"用户问题：{question}\n\n"
                 "请只依据随后提供的图片和每张图片的已缓存说明作答。重点确认界面文字、按钮或接口位置、"
                 "接线关系、指示灯状态、图形走势和部件方向。无法从图片确认的内容必须明确说明无法确认，"
@@ -311,7 +327,8 @@ def node_image_reasoning(state: QueryGraphState) -> Dict[str, Any]:
 
     try:
         question = str(state.get("rewritten_query") or state.get("original_query") or "").strip()
-        need_visual_reasoning = is_visual_question(question)
+        user_image_refs = _normalize_string_list(state.get("user_image_refs"))
+        need_visual_reasoning = bool(user_image_refs) or is_visual_question(question)
 
         with start_rag_observation(
             as_type="span",
@@ -319,6 +336,7 @@ def node_image_reasoning(state: QueryGraphState) -> Dict[str, Any]:
             input_data={
                 "question": question,
                 "reranked_document_count": len(state.get("reranked_docs") or []),
+                "session_attachment_count": len(user_image_refs),
             },
             metadata={
                 "pipeline": "query",
@@ -344,7 +362,11 @@ def node_image_reasoning(state: QueryGraphState) -> Dict[str, Any]:
                 }
 
             candidate_uris = _collect_candidate_uris(state.get("reranked_docs") or [])
-            selected_uris = candidate_uris[: image_processing_config.query_image_top_k]
+            # 会话附件优先进入视觉分析。剩余名额才选择知识库图片，避免图片数量和模型费用失控。
+            selected_user_uris = user_image_refs[: image_processing_config.query_image_top_k]
+            remaining_slots = max(0, image_processing_config.query_image_top_k - len(selected_user_uris))
+            selected_document_uris = candidate_uris[:remaining_slots]
+            selected_uris = [*selected_user_uris, *selected_document_uris]
             if not selected_uris:
                 _update_selection_observation(
                     selection_observation,
@@ -362,11 +384,15 @@ def node_image_reasoning(state: QueryGraphState) -> Dict[str, Any]:
                 }
 
             tenant_id = str(state.get("tenant_id") or "local")
-            selected_assets = _load_candidate_assets(tenant_id, selected_uris)
+            selected_assets = [
+                _build_session_attachment_asset(object_uri)
+                for object_uri in selected_user_uris
+            ]
+            selected_assets.extend(_load_candidate_assets(tenant_id, selected_document_uris))
             _update_selection_observation(
                 selection_observation,
                 status="selected",
-                candidate_count=len(candidate_uris),
+                candidate_count=len(user_image_refs) + len(candidate_uris),
                 selected_assets=selected_assets,
             )
 
@@ -378,7 +404,7 @@ def node_image_reasoning(state: QueryGraphState) -> Dict[str, Any]:
                 "image_reasoning_status": "vision_disabled",
                 "image_assets": selected_assets,
                 "image_analysis_context": cached_context,
-                "image_reasoning_object_uris": selected_uris,
+                "image_reasoning_object_uris": selected_document_uris,
             }
 
         try:
@@ -397,10 +423,11 @@ def node_image_reasoning(state: QueryGraphState) -> Dict[str, Any]:
                 "image_reasoning_status": "completed",
                 "image_assets": available_assets,
                 "image_analysis_context": analysis_context,
+                # 只把知识库图片返回到助手气泡；用户上传图已经显示在用户消息中，不重复回显。
                 "image_reasoning_object_uris": [
                     str(asset.get("object_uri") or "")
                     for asset in available_assets
-                    if asset.get("object_uri")
+                    if asset.get("object_uri") and not asset.get("session_attachment")
                 ],
             }
         except Exception as exc:
@@ -410,7 +437,7 @@ def node_image_reasoning(state: QueryGraphState) -> Dict[str, Any]:
                 "image_reasoning_status": "fallback_cached_description",
                 "image_assets": selected_assets,
                 "image_analysis_context": cached_context,
-                "image_reasoning_object_uris": selected_uris,
+                "image_reasoning_object_uris": selected_document_uris,
                 "image_reasoning_error": str(exc)[:500],
             }
     finally:

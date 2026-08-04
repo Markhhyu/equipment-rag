@@ -260,7 +260,11 @@ def _selected_image_object_refs(state: QueryGraphState) -> List[str]:
     asset_refs = [
         str(asset.get("object_uri") or "")
         for asset in (state.get("image_assets") or [])
-        if isinstance(asset, dict) and asset.get("object_uri")
+        if (
+            isinstance(asset, dict)
+            and asset.get("object_uri")
+            and not asset.get("session_attachment")
+        )
     ]
     return _unique_strings(asset_refs)
 

@@ -1,0 +1,83 @@
+:root {
+  font-family: Inter, "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  color: #172033;
+  background: #f4f6fa;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  --brand: #335cff;
+  --brand-dark: #2446d8;
+  --brand-soft: #edf1ff;
+  --ink: #172033;
+  --muted: #687188;
+  --line: #e5e9f1;
+  --panel: #ffffff;
+  --success: #17a673;
+  --warning: #e88919;
+  --danger: #e5484d;
+  --shadow: 0 18px 50px rgba(22, 34, 64, 0.08);
+}
+
+* { box-sizing: border-box; }
+html, body, #app { width: 100%; min-width: 320px; min-height: 100%; margin: 0; }
+body { min-height: 100vh; background: #f4f6fa; }
+button, input, textarea { font: inherit; }
+a { color: inherit; }
+
+.app-frame {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 8% 3%, rgba(51, 92, 255, 0.07), transparent 30%),
+    radial-gradient(circle at 96% 18%, rgba(66, 192, 160, 0.06), transparent 26%),
+    #f4f6fa;
+}
+
+.brand-mark {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 13px;
+  color: #fff;
+  font-weight: 800;
+  letter-spacing: -0.08em;
+  background: linear-gradient(145deg, #335cff, #6d83ff);
+  box-shadow: 0 10px 22px rgba(51, 92, 255, 0.28);
+}
+
+.brand-copy strong { display: block; font-size: 15px; line-height: 1.15; }
+.brand-copy span { color: var(--muted); font-size: 11px; }
+
+.top-button {
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.86);
+  color: #4d5870;
+  height: 38px;
+  padding: 0 13px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  transition: .2s ease;
+}
+.top-button:hover { border-color: #cbd3e3; color: var(--brand); transform: translateY(-1px); }
+.top-button.danger:hover { color: var(--danger); border-color: #f1b6b8; }
+
+.eyebrow {
+  color: var(--brand);
+  font-size: 12px;
+  line-height: 1;
+  font-weight: 750;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
+.dialog-intro { display: flex; gap: 12px; margin-bottom: 20px; }
+.dialog-intro p { margin: 5px 0 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.dialog-icon { width: 38px; height: 38px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 11px; color: var(--brand); background: var(--brand-soft); }
+.password-toggle { cursor: pointer; }
+
+@media (max-width: 720px) {
+  .desktop-label { display: none; }
+  .top-button { width: 38px; padding: 0; justify-content: center; }
+}

@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 import uvicorn
 from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.clients.image_asset_mongo_utils import get_image_asset_tool
 from app.clients.minio_utils import get_minio_client
@@ -63,6 +64,12 @@ configure_http_security(app)
 # Prometheus只采集数值指标，不会采集上传文件内容。启动后访问 /metrics 可查看原始指标。
 install_prometheus(app, "import-api")
 
+FRONTEND_DIST_DIR = PROJECT_ROOT / "frontend" / "dist"
+FRONTEND_ASSETS_DIR = FRONTEND_DIST_DIR / "assets"
+if FRONTEND_ASSETS_DIR.exists():
+    # 导入页和接口保持同源，生产环境启用API Key后不需要额外放宽CORS。
+    app.mount("/assets", StaticFiles(directory=FRONTEND_ASSETS_DIR), name="frontend-assets")
+
 
 @app.get("/health", tags=["system"])
 async def health():
@@ -72,7 +79,10 @@ async def health():
 
 @app.get("/import.html", response_class=FileResponse)
 async def get_import_page():
-    """返回文件导入前端页面。"""
+    """优先返回Vue构建页面；本地尚未构建时保留旧页面作为降级入口。"""
+    built_html_path = FRONTEND_DIST_DIR / "import.html"
+    if built_html_path.exists():
+        return FileResponse(path=built_html_path, media_type="text/html")
     html_abs_path = PROJECT_ROOT / "app/import_process/page/import.html"
     logger.info(f"前端页面访问，文件绝对路径：{html_abs_path}")
 

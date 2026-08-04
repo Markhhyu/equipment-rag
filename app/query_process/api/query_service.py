@@ -5,12 +5,19 @@ import uuid
 from typing import Literal, Optional
 
 import uvicorn
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.clients.minio_utils import resolve_object_urls
 from app.clients.mongo_history_utils import *
+from app.clients.session_attachment_utils import (
+    delete_session_attachments,
+    store_session_attachment,
+    validate_session_attachment_refs,
+)
+from app.conf.chat_attachment_config import chat_attachment_config
 from app.core.logger import logger
 from app.observability.langfuse_monitor import (
     create_query_trace_id,
@@ -25,7 +32,7 @@ from app.runtime.config import load_runtime_config
 from app.runtime.run_store import RunStatus, get_run_store, run_owner
 from app.security.auth import Principal, require_role
 from app.security.http import configure_http_security
-from app.security.tenancy import scoped_session_id
+from app.security.tenancy import safe_upload_filename, scoped_session_id
 from app.utils.sse_utils import SSEEvent, create_sse_queue, push_to_session, sse_generator
 from app.utils.task_utils import *
 
@@ -40,10 +47,19 @@ app = FastAPI(title="query service", description="设备文档Agent查询服务"
 configure_http_security(app)
 install_prometheus(app, "query-api")
 
+FRONTEND_DIST_DIR = Path(__file__).resolve().parents[3] / "frontend" / "dist"
+FRONTEND_ASSETS_DIR = FRONTEND_DIST_DIR / "assets"
+if FRONTEND_ASSETS_DIR.exists():
+    # Vue构建产物由查询服务同源提供，避免API Key与SSE请求受到跨域限制。
+    app.mount("/assets", StaticFiles(directory=FRONTEND_ASSETS_DIR), name="frontend-assets")
+
 
 @app.get("/chat.html")
 async def chat():
-    """返回查询页面。"""
+    """优先返回Vue构建页面；本地尚未构建时保留旧页面作为降级入口。"""
+    built_chat_path = FRONTEND_DIST_DIR / "chat.html"
+    if built_chat_path.exists():
+        return FileResponse(built_chat_path)
     current_dir_parent_path = Path(__file__).absolute().parent.parent
     chat_html_path = current_dir_parent_path / "page" / "chat.html"
     if not chat_html_path.exists():
@@ -54,9 +70,10 @@ async def chat():
 class QueryRequest(BaseModel):
     """查询请求数据结构。"""
 
-    query: str = Field(..., description="查询内容")
+    query: str = Field(default="", max_length=10000, description="查询内容；上传图片时可以留空")
     session_id: str = Field(None, description="会话ID")
     is_stream: bool = Field(False, description="是否流式返回")
+    image_refs: list[str] = Field(default_factory=list, description="当前租户和会话已上传的图片对象引用")
 
 
 class FeedbackRequest(BaseModel):
@@ -73,6 +90,62 @@ async def health():
     return {"ok": True}
 
 
+@app.get("/attachments/config")
+async def attachment_config(principal: Principal = Depends(require_role("query"))):
+    """返回聊天附件限制，供前端在上传前完成友好校验。"""
+    return {
+        "max_files": chat_attachment_config.max_files,
+        "max_bytes": chat_attachment_config.max_bytes,
+        "allowed_extensions": sorted(chat_attachment_config.allowed_extensions),
+        "allowed_content_types": sorted(chat_attachment_config.allowed_content_types),
+    }
+
+
+@app.post("/attachments/{session_id}")
+async def upload_session_attachments(
+    session_id: str,
+    files: list[UploadFile] = File(...),
+    principal: Principal = Depends(require_role("query")),
+):
+    """上传只属于当前会话的图片；不会写入图片资产集合、Milvus或知识库。"""
+    try:
+        scoped_session_id(principal.tenant_id, session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not files:
+        raise HTTPException(status_code=422, detail="请至少选择一张图片")
+    if len(files) > chat_attachment_config.max_files:
+        raise HTTPException(status_code=422, detail=f"每轮最多上传 {chat_attachment_config.max_files} 张图片")
+
+    attachments = []
+    try:
+        for upload in files:
+            filename = safe_upload_filename(upload.filename, chat_attachment_config.allowed_extensions)
+            attachments.append(
+                store_session_attachment(
+                    tenant_id=principal.tenant_id,
+                    session_id=session_id,
+                    original_filename=filename,
+                    stream=upload.file,
+                )
+            )
+        logger.info(
+            f"会话图片上传完成，tenant_id={principal.tenant_id}，session_id={session_id}，"
+            f"图片数={len(attachments)}"
+        )
+        return {"session_id": session_id, "attachments": attachments}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception(f"上传会话图片失败，session_id={session_id}，错误={exc}")
+        raise HTTPException(status_code=500, detail="上传会话图片失败") from exc
+    finally:
+        for upload in files:
+            await upload.close()
+
+
 def run_query_graph(
     session_id: str,
     user_query: str,
@@ -80,6 +153,7 @@ def run_query_graph(
     trace_id: str,
     resume: bool = False,
     tenant_id: str = "local",
+    user_image_refs: Optional[list[str]] = None,
 ):
     """执行一次完整问答流程。"""
     run_started = time.perf_counter()
@@ -95,6 +169,7 @@ def run_query_graph(
         "session_id": session_id,
         "user_query": user_query,
         "is_stream": is_stream,
+        "image_refs": user_image_refs or [],
     }
     run_store.create(
         trace_id,
@@ -112,6 +187,7 @@ def run_query_graph(
         "tenant_id": tenant_id,
         "trace_id": trace_id,
         "is_stream": is_stream,
+        "user_image_refs": user_image_refs or [],
     }
 
     try:
@@ -237,12 +313,30 @@ async def query(
     principal: Principal = Depends(require_role("query")),
 ):
     """提交设备知识问答请求。"""
-    user_query = request.query
+    user_query = request.query.strip()
     session_id = request.session_id if request.session_id else str(uuid.uuid4())
     try:
         internal_session_id = scoped_session_id(principal.tenant_id, session_id)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    try:
+        user_image_refs = validate_session_attachment_refs(
+            principal.tenant_id,
+            session_id,
+            request.image_refs,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception(f"验证会话图片失败，session_id={session_id}，错误={exc}")
+        raise HTTPException(status_code=422, detail="会话图片不存在或已失效") from exc
+    if not user_query and not user_image_refs:
+        raise HTTPException(status_code=422, detail="问题和图片不能同时为空")
+    if not user_query:
+        user_query = "请分析我上传的设备图片，并说明可以确认的信息。"
 
     try:
         trace_id = create_query_trace_id()
@@ -259,6 +353,7 @@ async def query(
             "session_id": session_id,
             "user_query": user_query,
             "is_stream": request.is_stream,
+            "image_refs": user_image_refs,
         },
         max_attempts=runtime_config.max_attempts,
         tenant_id=principal.tenant_id,
@@ -281,6 +376,7 @@ async def query(
             trace_id,
             False,
             principal.tenant_id,
+            user_image_refs,
         )
         return {
             "message": "结果正在处理中...",
@@ -295,6 +391,7 @@ async def query(
         trace_id,
         False,
         principal.tenant_id,
+        user_image_refs,
     )
     run_record = run_store.get_for_tenant(trace_id, principal.tenant_id)
     if final_state is None or run_record is None or run_record.status == RunStatus.FAILED:
@@ -358,6 +455,7 @@ async def retry_run(
         run_id,
         True,
         principal.tenant_id,
+        list(run.input.get("image_refs") or []),
     )
     return pending.to_public_dict()
 
@@ -471,7 +569,19 @@ async def clear_chat_history(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     count = clear_history(internal_session_id)
-    return {"message": "History cleared", "deleted_count": count}
+    deleted_attachment_count = 0
+    attachment_cleanup_error = ""
+    try:
+        deleted_attachment_count = delete_session_attachments(principal.tenant_id, session_id)
+    except Exception as exc:
+        attachment_cleanup_error = str(exc)[:300]
+        logger.exception(f"清理会话图片失败，session_id={session_id}，错误={exc}")
+    return {
+        "message": "History cleared",
+        "deleted_count": count,
+        "deleted_attachment_count": deleted_attachment_count,
+        "attachment_cleanup_error": attachment_cleanup_error,
+    }
 
 
 if __name__ == "__main__":

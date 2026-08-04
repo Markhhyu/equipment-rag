@@ -433,6 +433,7 @@ def step_7_write_history(state: Dict, session_id: str, rewritten_query: str, mes
         text=state["original_query"],
         rewritten_query=rewritten_query,
         item_names=state.get("item_names", []),
+        image_urls=state.get("user_image_refs", []),
         message_id=message_id
     )
 
@@ -458,7 +459,14 @@ def node_item_name_confirm(state: QueryGraphState) -> QueryGraphState:
         logger.info(f"Node: 获取到 {len(history)} 条历史消息")
 
         # 2. 先保存用户原始消息，流程结束时只补充重写问题和最终设备名，不改变创建时间。
-        message_id = save_chat_message(session_id, "user", original_query, "", state.get("item_names", []))
+        message_id = save_chat_message(
+            session_id,
+            "user",
+            original_query,
+            "",
+            state.get("item_names", []),
+            state.get("user_image_refs", []),
+        )
         logger.debug(f"Node: 用户消息已初始保存, ID: {message_id}")
 
         # 3. 信息提取分三层，确定性越强的规则优先级越高。

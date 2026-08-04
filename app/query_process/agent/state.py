@@ -19,6 +19,8 @@ class QueryGraphState(TypedDict, total=False):
     rewritten_query: str
     history: list
     is_stream: bool
+    # 用户在聊天框上传、仅属于当前会话的图片引用；不会写入Milvus或知识库图片资产集合。
+    user_image_refs: List[str]
 
     # 设备或商品识别结果。
     item_names: List[str]

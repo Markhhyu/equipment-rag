@@ -8,7 +8,11 @@ pytest-cache-files-*/
 .ruff_cache/
 .coverage
 htmlcov/
+.python-version
+milvus-full.log
 build/
+frontend/node_modules/
+frontend/dist/
 logs/
 output/
 # 一键启动脚本在此创建 MinerU 本地虚拟环境、日志、解析输出和 PID 文件。
@@ -17,3 +21,4 @@ deploy/mineru-runtime/
 .idea/
 .vscode/
 .DS_Store
+/doc/

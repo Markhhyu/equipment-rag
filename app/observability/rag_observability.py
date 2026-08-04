@@ -157,6 +157,8 @@ def summarize_image_reasoning(final_state: dict) -> dict:
         "need_visual_reasoning": bool(final_state.get("need_visual_reasoning")),
         "status": final_state.get("image_reasoning_status") or "not_required",
         "selected_image_count": len(selected_uris),
+        "session_attachment_count": len(final_state.get("user_image_refs") or []),
+        "analyzed_image_count": len(image_assets),
         "available_asset_count": len(image_assets),
         "image_context_length": len(image_context),
         "has_image_context": bool(image_context),
