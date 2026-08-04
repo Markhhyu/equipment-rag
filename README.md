@@ -2,68 +2,70 @@
 
 # Equipment RAG Agent
 
-### 面向制造业设备手册与运维知识的多路检索增强智能问答系统
+面向设备手册、SOP 与运维知识的多模态 RAG Agent
 
-基于 **LangGraph + MinerU + BGE-M3 + Milvus + Reranker + MCP + Langfuse** 构建，覆盖设备文档导入、结构化解析、混合检索、多轮问答、流式输出、质量追踪与用户反馈闭环。
+基于 **LangGraph、MinerU、BGE-M3、Milvus、Reranker、MinIO、MongoDB 与 Langfuse**，提供文档导入、混合检索、型号确认、图片理解、多轮问答、流式输出、运行恢复和质量评测。
 
 ![Python](https://img.shields.io/badge/Python-3.14-3776AB)
-![LangGraph](https://img.shields.io/badge/LangGraph-Agent-1C3C3C)
 ![FastAPI](https://img.shields.io/badge/FastAPI-Service-009688)
+![LangGraph](https://img.shields.io/badge/LangGraph-Agent-1C3C3C)
 ![Milvus](https://img.shields.io/badge/Milvus-Hybrid_Search-00A1EA)
-![MinerU](https://img.shields.io/badge/MinerU-3.x-6A5ACD)
 ![Langfuse](https://img.shields.io/badge/Langfuse-Observability-orange)
 
 </div>
 
 ---
 
-## 项目简介
+## 阅读导航
 
-Equipment RAG Agent 面向制造业设备知识管理与现场运维场景，目标是将分散的设备说明书、操作手册、SOP、维护记录等文档，转换为可检索、可追踪、可复用的设备知识库。
+第一次使用时，建议按以下顺序阅读：
 
-项目并非简单的“PDF 问答 Demo”，而是拆分为两条独立的 Agent 工作流：
+1. [先了解项目能做什么](#项目能做什么)
+2. [准备环境并完成最小配置](#5-分钟快速开始)
+3. [打开导入页面和聊天页面](#服务地址)
+4. [需要调整效果时查看配置地图](#配置地图)
+5. [遇到问题时查看排障清单](#常见问题)
 
-1. **知识库导入 Agent**：负责文件上传、文档解析、图片处理、语义切片、设备名称识别、向量生成和 Milvus 入库。
-2. **设备问答 Agent**：负责设备型号确认、多路并发检索、RRF 融合、Reranker 重排、答案生成、SSE 流式返回和问答质量追踪。
+更深入的专题文档：
 
-典型应用场景：
-
-- 设备工程师查询设备操作方法、参数设置和故障处理步骤；
-- 新员工快速检索设备说明书与 SOP；
-- 多厂区复用同型号设备的操作经验；
-- 从复杂 PDF 中保留图片、表格、公式及其上下文；
-- 对模糊型号进行澄清，避免检索到错误设备资料；
-- 通过 Langfuse Trace 和用户反馈定位低质量回答。
-
-> 稳定版本以 `main` 分支为准，功能升级通过独立 Pull Request 合入。
+| 文档 | 适合什么时候看 |
+|---|---|
+| [配置与密钥指南](docs/configuration.md) | 不清楚 API Key、连接地址或密码从哪里获取时 |
+| [可观测、评测与调优指南](docs/observability.md) | 需要分析 Trace、指标或调整 RAG 参数时 |
+| [运行恢复说明](docs/durable-runtime.md) | 需要理解任务状态、Checkpoint 和失败重试时 |
+| [安全与多租户说明](docs/security.md) | 准备部署到服务器或开放给其他用户时 |
+| [评测使用说明](evals/README.md) | 准备黄金问题集和自动回归时 |
+| [贡献指南](CONTRIBUTING.md) | 准备修改代码或提交 Pull Request 时 |
 
 ---
 
-## 核心能力
+## 项目能做什么
 
-| 模块 | 能力 | 状态 |
-|---|---|---|
-| 文档导入 | PDF、Markdown 文件上传与后台处理 | ✅ 已实现 |
-| 文档解析 | 通过独立 MinerU 3.x API 将 PDF 转换为 Markdown 和结构化 JSON | ✅ 已实现 |
-| 图片处理 | 识别 Markdown 引用图片并上传 MinIO | ✅ 已实现 |
-| 文档切片 | 按标题和正文结构进行设备文档切片 | ✅ 已实现 |
-| 设备识别 | 从文件名和正文中识别设备名称、品牌和型号 | ✅ 已实现 |
-| 混合向量 | BGE-M3 生成 1024 维 Dense Vector 和 Sparse Vector | ✅ 已实现 |
-| 向量存储 | Milvus 自动建表、自动建索引、同设备旧数据幂等清理 | ✅ 已实现 |
-| 本地检索 | Milvus Dense + Sparse 混合检索 | ✅ 已实现 |
-| HyDE 检索 | 生成假设回答后进行第二路向量检索 | ✅ 已实现 |
-| 联网检索 | 通过百炼 MCP WebSearch 获取补充资料 | ✅ 已实现 |
-| 图谱检索 | Neo4j 节点已接入 LangGraph，实际查询逻辑待补充 | 🚧 预留节点 |
-| 结果融合 | RRF 对多路检索结果进行融合排序 | ✅ 已实现 |
-| 精排模型 | BGE / Qwen Reranker Provider 可配置切换 | ✅ 已实现 |
-| 多轮对话 | MongoDB 保存会话历史、改写问题和设备名称 | ✅ 已实现 |
-| 流式回答 | FastAPI + SSE 增量输出 | ✅ 已实现 |
-| 回答图片 | 从本地切片或检索文档中提取图片链接 | ✅ 已实现 |
-| 可观测性 | Langfuse Trace、节点耗时、Token、基础评分 | ✅ 已实现 |
-| 用户反馈 | 点赞/点踩同时写入 Langfuse 和 MongoDB | ✅ 已实现 |
-| 权限与鉴权 | API Key、角色和租户级运行/会话/向量/对象隔离 | ✅ 已实现 |
-| 自动化评测 | 确定性离线数据集、阈值门禁和报告 | ✅ 已实现 |
-| 运行指标 | Prometheus指标与Grafana预置Dashboard | ✅ 已实现 |
+项目不是单一的“PDF 问答 Demo”，而是由两条可独立运行的 Agent 工作流组成：
+
+- **知识库导入 Agent**：解析 PDF/Markdown，提取图片和上下文，识别设备名称，生成 Dense/Sparse 向量并写入 Milvus。
+- **设备问答 Agent**：确认设备型号，并行执行普通检索、HyDE、联网搜索和图谱预留节点，经过 RRF 与 Reranker 后生成带图片的回答。
+
+### 已实现能力
+
+| 能力 | 说明 |
+|---|---|
+| PDF / Markdown 导入 | PDF 使用独立 MinerU 服务解析；Markdown 可直接导入 |
+| 多模态图片链路 | 图片保存到 MinIO，可异步生成说明，并按问题返回相关手册图片 |
+| 型号确认 | 明确型号优先精确识别；模糊名称按阈值自动确认或要求用户澄清 |
+| 混合检索 | BGE-M3 Dense + Sparse、HyDE、RRF、BGE/Qwen Reranker |
+| 多轮问答 | MongoDB 保存严格按时间排列的用户/助手消息、设备名、图片和 Trace ID |
+| 流式回答 | FastAPI + SSE 返回节点进度、增量文本和最终结果 |
+| 可恢复运行 | MongoDB 运行注册表与 LangGraph Checkpoint 支持失败重试 |
+| 可观测与调优 | Langfuse Trace/Score、Prometheus 指标、Grafana Dashboard、离线评测 |
+| 安全隔离 | API Key、角色、租户级会话/向量/对象存储隔离 |
+
+### 当前边界
+
+- Neo4j 节点已接入流程，但实际图谱查询仍是预留实现。
+- 百炼 WebSearch MCP 是可选能力；关闭或调用失败时会降级到本地知识库。
+- MinerU 只在导入 PDF 时必需，导入 Markdown 和普通问答不依赖它。
+- 本项目用于知识检索和辅助判断，不能替代设备安全规范、锁机挂牌流程或专业工程师确认。
 
 ---
 
@@ -71,151 +73,486 @@ Equipment RAG Agent 面向制造业设备知识管理与现场运维场景，目
 
 ```mermaid
 flowchart LR
-    subgraph ImportAgent["知识库导入 Agent"]
-        U1["PDF / Markdown"] --> API1["文件导入服务 :8000"]
-        API1 --> STORE1["本地目录 + MinIO"]
-        STORE1 --> ENTRY["node_entry"]
-        ENTRY --> MINERU["MinerU PDF 解析"]
-        ENTRY --> MD["Markdown 直接读取"]
-        MINERU --> IMG["图片处理"]
-        MD --> IMG
-        IMG --> SPLIT["文档切片"]
+    subgraph Import["知识库导入"]
+        FILE["PDF / Markdown"] --> IMPORT_API["导入 API :8000"]
+        IMPORT_API --> PARSE["MinerU / Markdown 解析"]
+        PARSE --> IMAGE["图片提取与 MinIO 存储"]
+        IMAGE --> SPLIT["结构化切片"]
         SPLIT --> ITEM["设备名称识别"]
         ITEM --> EMB["BGE-M3 Dense + Sparse"]
-        EMB --> MILVUS["Milvus 向量库"]
+        EMB --> MILVUS["Milvus"]
     end
 
-    subgraph QueryAgent["设备问答 Agent"]
-        U2["用户问题"] --> API2["查询服务 :8001"]
-        API2 --> CONFIRM["设备型号确认 / 问题改写"]
-        CONFIRM --> MULTI["多路并发检索"]
-        MULTI --> LOCAL["Milvus 混合检索"]
-        MULTI --> HYDE["HyDE 检索"]
-        MULTI --> MCP["MCP WebSearch"]
-        MULTI --> KG["Neo4j 预留节点"]
-        LOCAL --> JOIN["结果合并"]
-        HYDE --> JOIN
-        MCP --> JOIN
-        KG --> JOIN
-        JOIN --> RRF["RRF 融合"]
-        RRF --> RERANK["BGE / Qwen Reranker"]
-        RERANK --> LLM["LLM 生成答案"]
-        LLM --> SSE["同步响应 / SSE 流式响应"]
+    subgraph Query["设备问答"]
+        USER["用户问题"] --> QUERY_API["查询 API :8001"]
+        QUERY_API --> CONFIRM["型号确认与问题改写"]
+        CONFIRM --> SEARCH["普通检索 / HyDE / MCP / KG"]
+        SEARCH --> RRF["RRF 融合"]
+        RRF --> RERANK["Reranker 精排"]
+        RERANK --> VISION["按需图片理解"]
+        VISION --> ANSWER["答案与图片 / SSE"]
     end
 
-    MILVUS --> LOCAL
-    API2 --> MONGO["MongoDB 会话历史"]
-    API2 --> LF["Langfuse Trace / Score"]
-    SSE --> MONGO
-    SSE --> LF
+    MILVUS --> SEARCH
+    QUERY_API <--> MONGO["MongoDB 历史 / 运行 / Checkpoint"]
+    ANSWER --> LANGFUSE["Langfuse Trace / Score"]
+    QUERY_API --> METRICS["Prometheus / Grafana"]
 ```
 
----
-
-## 知识库导入流程
-
-导入 Agent 使用 LangGraph 编排以下节点：
+导入节点：
 
 ```text
 node_entry
-    ├── PDF  → node_pdf_to_md
-    └── MD   → 直接进入 node_md_img
-                    ↓
-              node_md_img
-                    ↓
-          node_document_split
-                    ↓
-      node_item_name_recognition
-                    ↓
-          node_bge_embedding
-                    ↓
-          node_import_milvus
-                    ↓
-                   END
+  ├─ PDF → node_pdf_to_md
+  └─ MD  ─────────────────┐
+                          ↓
+node_md_img → node_document_split → node_item_name_recognition
+            → node_bge_embedding → node_import_milvus → END
 ```
 
-### 处理步骤
-
-1. 上传 PDF 或 Markdown 文件；
-2. 文件保存到本地任务目录，并尝试同步到 MinIO；
-3. PDF 通过独立 MinerU API 异步解析；
-4. 下载并解压 MinerU 返回的 Markdown、图片和结构化 JSON；
-5. 提取 Markdown 图片及上下文，生成可访问的图片地址；
-6. 按文档标题层级和正文内容切片；
-7. 调用 LLM 识别设备名称、品牌和型号；
-8. 使用 BGE-M3 生成 Dense 和 Sparse 双向量；
-9. 自动创建 Milvus Collection 与索引；
-10. 按 `item_name` 删除旧数据后批量写入，实现幂等更新。
-
-### Milvus 索引
-
-| 向量字段 | 类型 | 索引 | 距离度量 |
-|---|---|---|---|
-| `dense_vector` | FLOAT_VECTOR，默认 1024 维 | HNSW | COSINE |
-| `sparse_vector` | SPARSE_FLOAT_VECTOR | SPARSE_INVERTED_INDEX | IP |
-
----
-
-## 设备问答流程
-
-问答 Agent 使用 LangGraph 编排多路检索：
+问答节点：
 
 ```text
 node_item_name_confirm
-          ↓
-   node_multi_search
-     ├── node_search_embedding
-     ├── node_search_embedding_hyde
-     ├── node_web_search_mcp
-     └── node_query_kg（预留）
-          ↓
-       node_join
-          ↓
-       node_rrf
-          ↓
-      node_rerank
-          ↓
-  node_answer_output
-          ↓
-         END
+  → node_multi_search
+      ├─ node_search_embedding
+      ├─ node_search_embedding_hyde
+      ├─ node_web_search_mcp
+      └─ node_query_kg（预留）
+  → node_join → node_rrf → node_rerank
+  → node_image_reasoning → node_answer_output → END
 ```
-
-### 关键设计
-
-- **设备型号确认**：从问题和历史对话中提取设备名称并改写问题；
-- **模糊问题处理**：设备型号不明确时，直接向用户发起澄清，不继续错误检索；
-- **本地混合检索**：结合 BGE-M3 Dense 与 Sparse 向量，提高语义和关键词召回；
-- **HyDE 检索**：利用假设答案增强复杂问题的召回能力；
-- **MCP 联网搜索**：从外部资料补充本地知识库缺失的信息；
-- **RRF 融合**：对多路结果统一融合，降低单一检索策略偏差；
-- **Reranker 精排**：根据问题与候选文档的相关性重新排序；
-- **答案溯源**：向 Prompt 注入来源、标题、Chunk ID、URL 和分数；
-- **图片返回**：识别本地 Markdown 图片或联网结果中的图片 URL；
-- **多轮记忆**：MongoDB 保存用户问题、回答、设备名称、图片和 Trace ID；
-- **质量闭环**：Langfuse 记录完整调用链路，页面支持点赞和点踩。
 
 ---
 
-## 技术栈
+## 5 分钟快速开始
 
-| 分类 | 技术 |
+### 1. 环境要求
+
+| 环境 | 要求 |
 |---|---|
-| Agent 编排 | LangGraph、LangChain |
-| Web 服务 | FastAPI、Uvicorn |
-| LLM | OpenAI-Compatible API、ChatOpenAI |
-| PDF 解析 | MinerU 3.x API |
-| Embedding | BGE-M3 |
-| 向量数据库 | Milvus |
-| 融合排序 | RRF、Milvus WeightedRanker |
-| Reranker | BGE Reranker、Qwen3 Reranker |
-| 会话存储 | MongoDB |
-| 对象存储 | MinIO |
-| 联网工具 | MCP、百炼 WebSearch |
-| 知识图谱 | Neo4j（节点预留） |
-| 可观测性 | Langfuse |
-| 前端交互 | HTML、JavaScript、SSE |
-| 包管理 | uv |
-| 日志 | Loguru |
+| 操作系统 | 推荐 Windows 10/11；Linux 和 WSL2 可使用 Docker Compose |
+| Docker | Docker Desktop 或 Docker Engine，支持 Compose v2 |
+| 主项目 Python | 仅本地开发需要，版本 `>=3.14,<3.15` |
+| uv | 仅本地开发或安装 MinerU 时需要 |
+| 内存 | 建议至少 16 GB；模型首次加载时占用会明显增加 |
+| GPU | 可选；默认配置使用 CPU，首次验证不要求 NVIDIA GPU |
+
+### 2. 克隆并创建配置
+
+Windows PowerShell：
+
+```powershell
+git clone https://github.com/Markhhyu/equipment-rag-agent.git
+cd equipment-rag-agent
+Copy-Item .env.example .env
+notepad .env
+```
+
+Linux / macOS：
+
+```bash
+git clone https://github.com/Markhhyu/equipment-rag-agent.git
+cd equipment-rag-agent
+cp .env.example .env
+```
+
+`.env` 已被 Git 忽略。不要使用 `git add -f .env`，也不要把密钥粘贴到 Issue、日志或截图中。
+
+### 3. 填写最小模型配置
+
+首次启动至少确认以下配置：
+
+```env
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_API_KEY=替换为真实密钥
+LLM_DEFAULT_MODEL=gpt-4.1-mini
+VL_MODEL=gpt-4.1-mini
+```
+
+这里使用的是 **OpenAI-compatible API**。使用阿里云百炼或其他兼容服务时，应同时替换 Base URL、API Key 和模型 ID；不要在 Key 前添加 `Bearer `。
+
+如果暂时不使用联网搜索、Langfuse 或 Neo4j，保持以下配置为空或关闭即可：
+
+```env
+MCP_DASHSCOPE_BASE_URL=
+LANGFUSE_TRACING_ENABLED=false
+NEO4J_URI=
+```
+
+### 4. 一键启动
+
+Windows 推荐使用：
+
+```powershell
+.\start-all.ps1
+```
+
+如果执行策略阻止 `.ps1`，可以运行：
+
+```powershell
+.\start-all.cmd
+```
+
+脚本会依次完成：
+
+1. 校验 Docker、Compose 文件和模型配置；
+2. 启动或修复本地 Langfuse 配置，不删除已有数据卷；
+3. 启动 MongoDB、MinIO、etcd 和 Milvus；
+4. 检测并按需启动宿主机 MinerU；
+5. 构建并启动导入 API、查询 API；
+6. 启动 Prometheus、Grafana 和 Attu；
+7. 等待健康检查并打印所有访问地址。
+
+首次启动需要下载容器镜像、Python 依赖、BGE-M3 和 Reranker 模型，耗时取决于网络和磁盘速度。
+
+### 5. 查看状态与停止服务
+
+```powershell
+docker compose --profile observability ps
+docker compose logs --tail 200 import-api query-api
+```
+
+安全暂停全部服务：
+
+```powershell
+.\stop-all.ps1
+```
+
+删除容器和网络、但保留命名卷及业务数据：
+
+```powershell
+.\stop-all.ps1 -RemoveContainers
+```
+
+> 不要把 `docker compose down -v` 当作普通排障命令。`-v` 会删除 MongoDB、Milvus、MinIO、Langfuse 和仪表盘数据。
+
+---
+
+## 服务地址
+
+默认只绑定 `127.0.0.1`，不会直接暴露到局域网。
+
+| 服务 | 默认地址 | 用途 |
+|---|---|---|
+| 导入页面 | <http://127.0.0.1:8000/import.html> | 上传 PDF/Markdown 并查看导入进度 |
+| 聊天页面 | <http://127.0.0.1:8001/chat.html> | 多轮问答、图片展示和反馈 |
+| 导入 API 文档 | <http://127.0.0.1:8000/docs> | 导入接口 Swagger |
+| 查询 API 文档 | <http://127.0.0.1:8001/docs> | 问答接口 Swagger |
+| MinIO 控制台 | <http://127.0.0.1:9001> | 查看原始文件和图片对象 |
+| Langfuse | <http://127.0.0.1:3000> | 单次 Trace、Token、Score 和反馈 |
+| Grafana | <http://127.0.0.1:3001> | 延迟、错误率和长期趋势 |
+| Attu | <http://127.0.0.1:3002> | 查看 Milvus Collection 与数据 |
+| Prometheus | <http://127.0.0.1:9090> | 查询原始指标 |
+| MinerU API | <http://127.0.0.1:8002/docs> | PDF 解析服务；安装后才可访问 |
+
+端口冲突时修改 `.env` 中的 `*_PORT`，不需要修改源码。
+
+---
+
+## 启动方式
+
+### Windows 一键脚本参数
+
+| 参数 | 适用场景 |
+|---|---|
+| `-SkipBuild` | 代码和依赖没有变化，只想快速恢复容器 |
+| `-CoreOnly` | 内存有限，不启动 Langfuse、Prometheus/Grafana 和 Attu |
+| `-NoLangfuse` | 只跳过 Langfuse |
+| `-NoObservability` | 只跳过 Prometheus 和 Grafana |
+| `-NoAttu` | 只跳过 Milvus 管理页面 |
+| `-NoMineru` | 不解析 PDF，或 MinerU 由其他方式运行 |
+| `-TimeoutSeconds 1200` | 首次下载镜像/模型较慢，延长单服务等待时间 |
+| `-MineruPort 8002` | MinerU 使用了非默认端口 |
+
+示例：
+
+```powershell
+# 日常快速恢复
+.\start-all.ps1 -SkipBuild
+
+# 低内存环境，只运行核心 RAG 服务并跳过 MinerU
+.\start-all.ps1 -CoreOnly -NoMineru
+
+# 保留仪表盘，只跳过 Langfuse 和 Attu
+.\start-all.ps1 -NoLangfuse -NoAttu
+```
+
+### 手工启动 Docker 核心服务
+
+```powershell
+docker compose config --quiet
+docker compose up -d --build
+docker compose ps
+```
+
+该方式默认启动两个 API、MongoDB、MinIO、etcd 和 Milvus，不启动独立 MinerU、Langfuse、Attu；Prometheus/Grafana 需要显式启用 profile：
+
+```powershell
+docker compose --profile observability up -d
+```
+
+---
+
+## 配置地图
+
+`.env.example` 是完整、带中文注释的配置手册。初次使用不需要理解全部变量，可以按功能分组逐步配置。
+
+### 配置优先级
+
+1. 当前进程环境变量；
+2. 仓库根目录 `.env`；
+3. `compose.yaml` 或代码中的安全默认值。
+
+修改 `.env` 后需要重新创建相关容器：
+
+```powershell
+docker compose up -d --force-recreate import-api query-api
+```
+
+### 必填与推荐配置
+
+| 分组 | 关键变量 | 是否必需 | 说明 |
+|---|---|---|---|
+| 对话模型 | `OPENAI_BASE_URL`、`OPENAI_API_KEY`、`LLM_DEFAULT_MODEL` | 必需 | 问题改写、HyDE、设备识别和答案生成 |
+| 视觉模型 | `VL_MODEL` | 图片能力必需 | 图片说明与查询阶段视觉理解 |
+| Embedding | `BGE_M3`、`BGE_DEVICE` | 有默认值 | 默认 CPU，模型下载后保存在 Docker 卷 |
+| Reranker | `RERANKER_PROVIDER`、`RERANKER_MODEL`、`RERANKER_DEVICE` | 有默认值 | 首次建议保持 BGE + CPU |
+| 数据服务 | `MONGO_URL`、`MILVUS_URL`、`MINIO_ENDPOINT` | Compose 已配置 | 容器内使用服务名，不使用 localhost |
+| PDF 解析 | `MINERU_API_BASE_URL`、`MINERU_BACKEND` | 仅 PDF 必需 | Markdown 导入不需要 MinerU |
+| 联网搜索 | `MCP_DASHSCOPE_*` | 可选 | 不使用时让 Base URL 保持为空 |
+| Trace | `LANGFUSE_*` | 可选 | 关闭时不需要 Public/Secret Key |
+| 生产鉴权 | `APP_ENVIRONMENT`、`AUTH_MODE`、`AUTH_API_KEYS_JSON` | 生产必需 | 详见安全文档 |
+
+### Docker 地址规则
+
+容器里的 `localhost` 只表示当前容器，不能指向宿主机或其他容器。
+
+| 调用方向 | 正确地址 |
+|---|---|
+| 应用容器 → MongoDB | `mongo:27017` |
+| 应用容器 → MinIO | `minio:9000` |
+| 应用容器 → Milvus | `milvus:19530` |
+| 应用容器 → 宿主机 MinerU | `host.docker.internal:8002` |
+| 浏览器 → MinIO | `localhost:9000` 或浏览器可访问的公开域名 |
+| 宿主机 Python → 中间件 | `127.0.0.1:对应端口` |
+
+因此 MinIO 必须区分两个地址：
+
+```env
+MINIO_ENDPOINT=minio:9000
+MINIO_PUBLIC_ENDPOINT=localhost:9000
+MINIO_REGION=us-east-1
+MINIO_PUBLIC_READ=false
+```
+
+### 图片配置
+
+```env
+IMAGE_PROCESS_MODE=smart
+IMAGE_ENRICHMENT_ASYNC=true
+QUERY_IMAGE_VISION_ENABLED=true
+QUERY_IMAGE_TOP_K=3
+LANGFUSE_MEDIA_UPLOAD_ENABLED=false
+```
+
+- `smart`：仅增强缺少有效图注的图片，适合日常使用。
+- `QUERY_IMAGE_TOP_K`：每次视觉问题最多分析和返回的相关图片数。
+- Langfuse 媒体上传默认关闭；Trace 仍记录图片数量、状态和定位摘要，避免上传 Base64 原图。
+
+### RAG 调优配置
+
+| 目标 | 变量 | 调整影响 |
+|---|---|---|
+| 控制切片长度 | `RAG_CHUNK_MIN_CHARS`、`RAG_CHUNK_MAX_CHARS` | 过小会割裂步骤，过大会增加噪声 |
+| 提高初始召回 | `RAG_RETRIEVAL_CANDIDATE_LIMIT` | 增大可能提高 Recall，也会增加耗时 |
+| 平衡语义与关键词 | `RAG_DENSE_WEIGHT`、`RAG_SPARSE_WEIGHT` | 型号/错误码通常更依赖 Sparse |
+| 调整两路检索 | `RAG_RRF_EMBEDDING_WEIGHT`、`RAG_RRF_HYDE_WEIGHT` | HyDE 偏题时可降低其权重 |
+| 控制精排截断 | `RAG_RERANK_MIN_TOPK`、`RAG_RERANK_MAX_TOPK`、`RAG_RERANK_GAP_*` | 影响证据数量、Token 和噪声 |
+| 控制型号确认 | `RAG_ITEM_NAME_AUTO_CONFIRM_SCORE`、`RAG_ITEM_NAME_AUTO_CONFIRM_MARGIN`、`RAG_ITEM_NAME_CANDIDATE_SCORE` | 越保守越不容易选错，但澄清次数增加 |
+
+一次只修改一个变量，并用相同文档与黄金问题集做前后对比。不要根据单个问题直接修改全局阈值。
+
+---
+
+## 使用流程
+
+### 1. 导入知识库
+
+1. 打开 <http://127.0.0.1:8000/import.html>；
+2. 上传 `.pdf` 或 `.md` 文件；
+3. 等待文本导入状态完成；
+4. 图片异步增强启用时，可继续观察图片处理进度；
+5. 在 Attu 中确认 `equipment_chunks` 和 `equipment_item_names` 已写入数据。
+
+PDF 会经过 MinerU；Markdown 会直接进入图片提取、切片、设备识别和向量入库流程。同一设备重新导入时会更新对应向量数据。
+
+### 2. 发起问答
+
+打开 <http://127.0.0.1:8001/chat.html>，建议在问题里包含明确型号：
+
+```text
+LJ2268 的控制面板各按钮在哪里？请结合手册图片说明。
+```
+
+当问题只包含“打印机”“真空泵”等模糊名称时，系统可能要求确认候选设备。确认后继续使用同一个 `session_id`，系统会结合最近历史完成多轮问答。
+
+### 3. API 示例
+
+非流式问答：
+
+```bash
+curl -X POST "http://127.0.0.1:8001/query" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "LJ2268 如何查看控制面板状态？",
+    "session_id": "demo-session-001",
+    "is_stream": false
+  }'
+```
+
+流式问答分两步：
+
+```bash
+curl -X POST "http://127.0.0.1:8001/query" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "LJ2268 启动前需要检查什么？",
+    "session_id": "demo-session-002",
+    "is_stream": true
+  }'
+
+curl -N "http://127.0.0.1:8001/stream/demo-session-002"
+```
+
+常用接口：
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| `POST` | `/upload` | 上传并导入文档 |
+| `GET` | `/status/{task_id}` | 查看导入和图片增强进度 |
+| `POST` | `/query` | 发起同步或流式问答 |
+| `GET` | `/stream/{session_id}` | 订阅 SSE 流 |
+| `GET` | `/history/{session_id}` | 获取会话历史 |
+| `DELETE` | `/history/{session_id}` | 清空当前租户会话 |
+| `POST` | `/feedback` | 提交点赞/点踩 |
+| `GET` | `/runs/{run_id}` | 查看持久化运行状态 |
+| `POST` | `/runs/{run_id}/retry` | 从最近 Checkpoint 重试失败运行 |
+
+导入与查询服务都有 `/runs` 接口，具体请求结构以各自 Swagger 页面为准。
+
+---
+
+## MinerU 独立服务
+
+MinerU 依赖较重，使用独立 Python 3.12 虚拟环境，不要安装进主项目 Python 3.14 环境。
+
+```powershell
+New-Item -ItemType Directory -Force deploy\mineru-runtime | Out-Null
+Set-Location deploy\mineru-runtime
+uv venv --python 3.12
+.\.venv\Scripts\Activate.ps1
+uv pip install -U "mineru[all]==3.4.4"
+```
+
+CPU 首次验证：
+
+```powershell
+$env:MINERU_MODEL_SOURCE="modelscope"
+$env:MINERU_API_OUTPUT_ROOT="$PWD\output"
+$env:MINERU_API_MAX_CONCURRENT_REQUESTS="1"
+mineru-api --host 127.0.0.1 --port 8002 --enable-vlm-preload false
+```
+
+根目录 `.env` 保持：
+
+```env
+MINERU_API_BASE_URL=http://host.docker.internal:8002
+MINERU_BACKEND=pipeline
+MINERU_IMAGE_ANALYSIS=false
+MINERU_LANGUAGE=ch_server
+```
+
+只有 MinerU 环境已经正确识别 CUDA、GPU 和对应模型时，才切换 `hybrid-engine` 或开启图片分析。
+
+---
+
+## 可观测性与评测
+
+三类工具解决不同问题：
+
+| 工具 | 观察范围 | 主要用途 |
+|---|---|---|
+| Langfuse | 单次导入或问答 | 查看节点、模型调用、Token、检索摘要、调优参数和用户反馈 |
+| Prometheus + Grafana | 长期运行趋势 | 查看吞吐、错误率、P95 延迟和节点性能 |
+| 黄金数据集评测 | 多版本效果对比 | 判断调参后 Recall、MRR、关键词、安全词和引用是否改善 |
+
+首次进入 Langfuse 后创建组织、项目和 API Key，再把以下内容写入根目录 `.env`：
+
+```env
+LANGFUSE_TRACING_ENABLED=true
+LANGFUSE_HOST=http://host.docker.internal:3000
+LANGFUSE_PUBLIC_KEY=pk-lf-替换为真实值
+LANGFUSE_SECRET_KEY=sk-lf-替换为真实值
+LANGFUSE_MEDIA_UPLOAD_ENABLED=false
+```
+
+随后重新创建应用容器：
+
+```powershell
+docker compose up -d --force-recreate import-api query-api
+```
+
+离线冒烟评测：
+
+```powershell
+uv run python -m app.evaluation.cli replay `
+  --predictions evals/fixtures/smoke_predictions.jsonl `
+  --fail-on-threshold
+```
+
+对运行中的 API 做真实回归：
+
+```powershell
+uv run python -m app.evaluation.cli api `
+  --base-url http://127.0.0.1:8001 `
+  --fail-on-threshold
+```
+
+完整指标解释和调优顺序见 [docs/observability.md](docs/observability.md)。
+
+---
+
+## 本地开发与验证
+
+主项目固定使用 Python 3.14 和 `uv.lock`：
+
+```powershell
+uv sync --frozen --group dev
+```
+
+直接在宿主机运行 API 前，需要把 `.env` 中 MongoDB、MinIO、Milvus、MinerU 地址从 Docker 服务名改为 `127.0.0.1`。
+
+```powershell
+uv run uvicorn app.import_process.api.file_import_service:app --host 127.0.0.1 --port 8000
+uv run uvicorn app.query_process.api.query_service:app --host 127.0.0.1 --port 8001
+```
+
+提交前运行一条完整质量门禁：
+
+```powershell
+uv run python scripts/check.py
+```
+
+该脚本会依次检查锁文件、依赖、Ruff、格式、单元测试、离线评测、Python 编译和 Compose 配置。只想单独排查某一项时再运行：
+
+```powershell
+uv run pytest -q
+uv run ruff check .
+docker compose config --quiet
+```
+
+测试环境会显式关闭 Langfuse 上报，不会把模拟问题或 Span 写入真实观测项目。
 
 ---
 
@@ -223,657 +560,119 @@ node_item_name_confirm
 
 ```text
 equipment-rag-agent/
-├── app/
-│   ├── clients/                         # Milvus、MinIO、MongoDB、Neo4j、MinerU 客户端
-│   ├── conf/                            # LLM、Embedding、Milvus、MinerU、Reranker 等配置
-│   ├── core/                            # 日志与 Prompt 加载
-│   ├── import_process/
-│   │   ├── agent/
-│   │   │   ├── main_graph.py            # 知识库导入 LangGraph
-│   │   │   ├── state.py                 # 导入状态定义
-│   │   │   └── nodes/                   # PDF解析、图片、切片、Embedding、入库节点
-│   │   ├── api/file_import_service.py   # 文件导入 FastAPI 服务
-│   │   └── page/import.html             # 文件导入页面
-│   ├── lm/                              # LLM、Embedding、旧版 Reranker 工具
-│   ├── model/reranker/                  # BGE / Qwen Reranker Provider
-│   ├── observability/                   # Langfuse 监控与 RAG 自动评分
-│   ├── query_process/
-│   │   ├── agent/
-│   │   │   ├── main_graph.py            # 设备问答 LangGraph
-│   │   │   ├── state.py                 # 查询状态定义
-│   │   │   └── nodes/                   # 检索、RRF、Rerank、回答节点
-│   │   ├── api/query_service.py         # 查询 FastAPI 服务
-│   │   └── page/chat.html               # 问答页面
-│   ├── tool/                            # 模型下载脚本
-│   └── utils/                           # SSE、任务状态、路径和格式工具
-├── deploy/
-│   └── langfuse/docker-compose.yml      # Langfuse 本地部署
-├── prompts/                             # Prompt 模板
-├── test/                                # 节点与全流程测试
-├── pyproject.toml                       # 主项目依赖
-└── uv.lock                              # uv 锁定依赖
+├─ app/
+│  ├─ clients/                 # MongoDB、Milvus、MinIO、MinerU、Neo4j 客户端
+│  ├─ conf/                    # 模型、检索、图片和服务配置
+│  ├─ import_process/          # 文档导入 API、页面和 LangGraph
+│  ├─ query_process/           # 问答 API、页面和 LangGraph
+│  ├─ model/reranker/          # BGE / Qwen Reranker Provider
+│  ├─ observability/           # Langfuse、Prometheus、质量指标
+│  ├─ runtime/                 # 运行注册表、租约和 Checkpoint
+│  ├─ security/                # API Key、角色、租户隔离
+│  ├─ evaluation/              # 离线回放和真实 API 评测
+│  └─ utils/                   # SSE、任务状态和通用工具
+├─ deploy/
+│  ├─ langfuse/                # Langfuse 自部署 Compose
+│  ├─ attu/                    # Milvus 管理页面
+│  └─ observability/           # Prometheus 与 Grafana 配置
+├─ docs/                       # 配置、安全、运行恢复和观测文档
+├─ evals/                      # 评测配置、数据集和示例预测
+├─ prompts/                    # Prompt 模板
+├─ scripts/check.py            # 本地质量检查入口
+├─ tests/                      # 单元与回归测试
+├─ .env.example                # 完整环境变量手册
+├─ compose.yaml                # 核心服务与观测 profile
+├─ start-all.ps1               # Windows 一键启动
+├─ stop-all.ps1                # Windows 安全暂停
+├─ pyproject.toml              # 依赖和工具配置
+└─ uv.lock                     # 锁定依赖版本
 ```
-
----
-
-## 环境要求
-
-### 基础环境
-
-- Python `>=3.12,<3.13`
-- uv
-- Docker / Docker Compose
-- Windows、Linux 或 WSL2
-- NVIDIA GPU 可选，但处理 PDF、Embedding 和 Reranker 时建议使用
-
-### 外部服务
-
-| 服务 | 是否必需 | 用途 |
-|---|---|---|
-| LLM API | 必需 | 设备识别、问题改写、HyDE、答案生成 |
-| Milvus | 必需 | Dense + Sparse 混合向量存储与检索 |
-| MongoDB | 查询服务建议启用 | 多轮会话、Trace ID、反馈状态 |
-| MinIO | 导入服务建议启用 | 原始文件和图片存储 |
-| MinerU API | 导入 PDF 时必需 | PDF 转 Markdown 和结构化内容 |
-| Langfuse | 可选 | Agent 链路、Token、评分与反馈 |
-| 百炼 MCP | 可选 | 联网 WebSearch |
-| Neo4j | 暂不必需 | 当前图谱节点仍为预留实现 |
-
----
-
-## 快速开始
-
-### Windows 全栈一键启动（推荐）
-
-克隆仓库后，首次运行只需要执行一个脚本：
-
-```powershell
-git clone https://github.com/Markhhyu/equipment-rag-agent.git
-cd equipment-rag-agent
-.\start-all.ps1
-```
-
-脚本会自动完成以下工作：
-
-- 检查 Docker Desktop 和所有 Compose 配置；
-- 根目录缺少 `.env` 时，从带详细中文注释的 `.env.example` 创建；
-- 首次运行时，为本地 Langfuse 自动生成安全且互相匹配的数据库、缓存和对象存储密钥；
-- 按依赖顺序启动 MongoDB、MinIO、Milvus、API、Langfuse、Prometheus、Grafana 和 Attu；
-- 检测 MinerU；未安装时只跳过 PDF 解析，不影响 Markdown 导入和问答；
-- 等待健康检查通过，最后统一列出页面地址和排查命令。
-
-如果 PowerShell 执行策略阻止运行，可以双击 `start-all.cmd`，它会调用同一个 PowerShell 实现。常用选项：
-
-```powershell
-# 代码和依赖没有变化时跳过镜像构建，加快再次启动。
-.\start-all.ps1 -SkipBuild
-
-# 内存不足时只启动业务核心组件，不启动 Langfuse、仪表盘和 Attu。
-.\start-all.ps1 -CoreOnly
-
-# 本机未安装 MinerU，且当前只导入 Markdown。
-.\start-all.ps1 -NoMineru
-```
-
-一键暂停默认只停止进程和容器，不删除容器、命名卷或业务数据，因此下次恢复更快：
-
-```powershell
-.\stop-all.ps1
-
-# 如需同时删除容器和网络，可使用此选项；命名卷和业务数据仍会保留。
-.\stop-all.ps1 -RemoveContainers
-```
-
-> 自动生成的 `deploy/langfuse/.env` 和根目录 `.env` 都已被 Git 忽略。请备份前者的 `ENCRYPTION_KEY`，并在真正调用模型前编辑根目录 `.env` 中的模型 API 配置。
-
-### Docker Compose 启动核心服务
-
-```bash
-git clone https://github.com/Markhhyu/equipment-rag-agent.git
-cd equipment-rag-agent
-docker compose up --build
-```
-
-该命令会同时启动查询 API、导入 API、MongoDB、MinIO、etcd 和 Milvus，但不包含 MinerU、Langfuse、Prometheus/Grafana 和 Attu。首次启动需要下载 Python 依赖和 BGE 模型，请耐心等待。
-
-启动后可访问：
-
-- 聊天页面：`http://localhost:8001/chat.html`
-- 导入页面：`http://localhost:8000/import.html`
-- 查询 API 文档：`http://localhost:8001/docs`
-- 导入 API 文档：`http://localhost:8000/docs`
-- MinIO 控制台：`http://localhost:9001`
-
-要真正调用 LLM，请复制配置模板并填写自己的 OpenAI-Compatible API：
-
-```bash
-cp .env.example .env
-docker compose up --build
-```
-
-Windows PowerShell：
-
-```powershell
-Copy-Item .env.example .env
-docker compose up --build
-```
-
-> Markdown 文件导入无需 MinerU；PDF 解析需要另行启动 MinerU，默认地址为宿主机 `8002` 端口。Langfuse、Neo4j 和 MCP WebSearch 也是可选集成。
-
-本地默认无需 API Key，并只绑定 `127.0.0.1`。生产部署会在未启用认证时拒绝启动；API Key、角色、租户隔离和私有 MinIO 配置见 [`docs/security.md`](docs/security.md)。
-
-### 本地 Python 开发
-
-项目使用 Python 3.14 和 uv。依赖版本已写入 `uv.lock`：
-
-```bash
-uv sync --frozen
-uv run uvicorn app.import_process.api.file_import_service:app --host 127.0.0.1 --port 8000
-uv run uvicorn app.query_process.api.query_service:app --host 127.0.0.1 --port 8001
-```
-
-开发者安装质量工具并执行与 CI 相同的本地检查：
-
-```bash
-uv sync --frozen --group dev
-uv run python scripts/check.py
-```
-
-离线评测与真实 API 回归使用同一个评测入口，详见 `evals/README.md`：
-
-```bash
-uv run python -m app.evaluation.cli replay \
-  --predictions evals/fixtures/smoke_predictions.jsonl \
-  --fail-on-threshold
-```
-
-完整的Langfuse、Prometheus/Grafana、黄金数据集和调优说明见 [`docs/observability.md`](docs/observability.md)。
-
-### 运行恢复
-
-Docker Compose 默认把运行状态和 LangGraph checkpoint 保存到 MongoDB。进程异常退出后，可使用原 `trace_id` 或 `task_id` 查看并恢复运行：
-
-```text
-GET  /runs/{run_id}
-POST /runs/{run_id}/retry
-```
-
-恢复会从最后成功的 LangGraph 节点继续，并受租约和最大尝试次数保护。完整说明见 `docs/durable-runtime.md`。
-
-### 环境变量
-
-`.env.example` 现在是可直接阅读的逐项配置手册，每个变量都说明了用途、获取方式、填写格式、Docker/宿主机差异和常见错误。完整操作说明见 [`docs/configuration.md`](docs/configuration.md)。
-
-首次启动只需要执行：
-
-```powershell
-Copy-Item .env.example .env
-notepad .env
-docker compose config --quiet
-docker compose up --build
-```
-
-至少确认以下四项：
-
-| 配置 | 从哪里获取 | 填写内容 |
-|---|---|---|
-| `OPENAI_BASE_URL` | 模型服务商的 OpenAI 兼容接口文档或创建密钥后的 API Host | 基础地址，通常以 `/v1` 结尾 |
-| `OPENAI_API_KEY` | OpenAI、阿里云百炼或其他模型服务商控制台 | 原始密钥，不加 `Bearer ` |
-| `LLM_DEFAULT_MODEL` | 服务商模型列表 | 支持对话的模型 ID |
-| `VL_MODEL` | 服务商模型列表 | 支持图片输入的模型 ID |
-
-连接地址的判断规则：
-
-| 应用运行位置 | MongoDB | MinIO | Milvus | MinerU |
-|---|---|---|---|---|
-| Docker Compose 容器内 | `mongo:27017` | `minio:9000` | `milvus:19530` | `host.docker.internal:8002` |
-| 直接在宿主机运行 Python | `127.0.0.1:27017` | `127.0.0.1:9000` | `127.0.0.1:19530` | `127.0.0.1:8002` |
-
-> 不要提交真实 API Key、密码、`.env` 或模型访问凭证。应用 API Key、MongoDB 密码和 MinIO 密码由部署者自己生成；OpenAI、百炼、Langfuse 和 Neo4j 凭据从各自控制台获取。
-
----
-
-## MinerU 独立服务
-
-MinerU 依赖较重，建议使用独立虚拟环境运行，不安装到主项目 `.venv`。
-
-### Windows PowerShell
-
-```powershell
-cd deploy
-New-Item -ItemType Directory -Force mineru-runtime | Out-Null
-cd mineru-runtime
-
-uv venv --python 3.12
-.\.venv\Scripts\Activate.ps1
-
-uv pip install -U "mineru[all]==3.4.4"
-```
-
-启动服务：
-
-```powershell
-$env:MINERU_MODEL_SOURCE="modelscope"
-$env:MINERU_API_OUTPUT_ROOT="$PWD\output"
-$env:MINERU_API_MAX_CONCURRENT_REQUESTS="1"
-$env:CUDA_VISIBLE_DEVICES="0"
-
-mineru-api --host 127.0.0.1 --port 8002 --enable-vlm-preload false
-```
-
-健康检查：
-
-```powershell
-Invoke-RestMethod http://127.0.0.1:8002/health
-```
-
-### CPU 模式
-
-主项目 `.env`：
-
-```env
-MINERU_BACKEND=pipeline
-MINERU_IMAGE_ANALYSIS=false
-```
-
-### GPU 模式
-
-主项目 `.env`：
-
-```env
-MINERU_BACKEND=hybrid-engine
-MINERU_EFFORT=high
-MINERU_IMAGE_ANALYSIS=true
-```
-
-验证 MinerU 环境是否识别 GPU：
-
-```powershell
-python -c "import torch; print('torch=', torch.__version__); print('torch_cuda=', torch.version.cuda); print('cuda_available=', torch.cuda.is_available()); print('gpu=', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'NONE')"
-```
-
----
-
-## 启动 Langfuse
-
-推荐直接运行根目录的 `.\start-all.ps1`：脚本会在首次启动时生成 `deploy/langfuse/.env`，并为数据库、缓存、加密和对象存储写入安全随机密钥。
-
-如果需要脱离一键脚本手工部署，Langfuse 的数据库、缓存和对象存储密码不能使用仓库默认占位值。请复制专用模板，并按注释生成不同的随机密钥：
-
-```powershell
-cd deploy/langfuse
-Copy-Item .env.example .env
-notepad .env
-docker compose --env-file .env config --quiet
-docker compose --env-file .env up -d
-```
-
-启动后访问 `http://localhost:3000`，创建组织和项目，然后进入 Project Settings → API Keys 获取：
-
-```env
-LANGFUSE_TRACING_ENABLED=true
-LANGFUSE_PUBLIC_KEY=pk-lf-...
-LANGFUSE_SECRET_KEY=sk-lf-...
-LANGFUSE_HOST=http://host.docker.internal:3000
-```
-
-以上四项填写在主项目根目录的 `.env`，不是 `deploy/langfuse/.env`。关闭 Langfuse：
-
-```bash
-docker compose down
-```
-
----
-
-## 启动服务
-
-### 1. 文件导入服务
-
-```bash
-uv run python -m app.import_process.api.file_import_service
-```
-
-默认地址：
-
-- 导入页面：`http://127.0.0.1:8000/import.html`
-- Swagger：`http://127.0.0.1:8000/docs`
-- 上传接口：`POST http://127.0.0.1:8000/upload`
-- 任务状态：`GET http://127.0.0.1:8000/status/{task_id}`
-- 持久化运行：`GET http://127.0.0.1:8000/runs/{task_id}`
-- 失败恢复：`POST http://127.0.0.1:8000/runs/{task_id}/retry`
-
-### 2. 查询服务
-
-```bash
-uv run python -m app.query_process.api.query_service
-```
-
-默认地址：
-
-- 聊天页面：`http://127.0.0.1:8001/chat.html`
-- Swagger：`http://127.0.0.1:8001/docs`
-- 健康检查：`GET http://127.0.0.1:8001/health`
-- 问答接口：`POST http://127.0.0.1:8001/query`
-- 持久化运行：`GET http://127.0.0.1:8001/runs/{trace_id}`
-- 失败恢复：`POST http://127.0.0.1:8001/runs/{trace_id}/retry`
-- SSE：`GET http://127.0.0.1:8001/stream/{session_id}`
-- 会话历史：`GET http://127.0.0.1:8001/history/{session_id}`
-- 清空历史：`DELETE http://127.0.0.1:8001/history/{session_id}`
-- 用户反馈：`POST http://127.0.0.1:8001/feedback`
-
----
-
-## API 示例
-
-### 上传文档
-
-```bash
-curl -X POST "http://127.0.0.1:8000/upload" \
-  -F "files=@./doc/equipment-manual.pdf"
-```
-
-返回示例：
-
-```json
-{
-  "code": 200,
-  "message": "Files uploaded successfully, total: 1",
-  "task_ids": [
-    "65b6804e-a85b-4b9e-9a86-fc9ac455a888"
-  ]
-}
-```
-
-查询任务状态：
-
-```bash
-curl "http://127.0.0.1:8000/status/65b6804e-a85b-4b9e-9a86-fc9ac455a888"
-```
-
-### 非流式问答
-
-```bash
-curl -X POST "http://127.0.0.1:8001/query" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "HAK180烫金机如何设置局部转印区域？",
-    "session_id": "demo-session-001",
-    "is_stream": false
-  }'
-```
-
-### 流式问答
-
-先提交问题：
-
-```bash
-curl -X POST "http://127.0.0.1:8001/query" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "设备启动前需要检查哪些项目？",
-    "session_id": "demo-session-002",
-    "is_stream": true
-  }'
-```
-
-再订阅 SSE：
-
-```bash
-curl -N "http://127.0.0.1:8001/stream/demo-session-002"
-```
-
-### 查询历史
-
-```bash
-curl "http://127.0.0.1:8001/history/demo-session-001?limit=50"
-```
-
-### 提交回答反馈
-
-```bash
-curl -X POST "http://127.0.0.1:8001/feedback" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "trace_id": "32位LangfuseTraceID",
-    "value": 1,
-    "comment": "回答准确，步骤清晰"
-  }'
-```
-
-`value` 说明：
-
-- `1`：点赞；
-- `0`：点踩。
-
----
-
-## 测试
-
-### 知识库导入全流程
-
-```bash
-uv run python test/04-test_graph_flow.py
-```
-
-### Langfuse 连接
-
-```bash
-uv run python test/06-test_langfuse_connection.py
-```
-
-### Reranker Provider
-
-```bash
-uv run python test/07-test_reranker_provider.py
-```
-
-### BGE-M3
-
-```bash
-uv run python test/test_bge_m3.py
-```
-
-### MinerU 客户端
-
-```bash
-uv run python -m app.import_process.agent.nodes.node_pdf_to_md
-```
-
----
-
-## Langfuse 可观测性
-
-每轮问答使用两个标识：
-
-- `session_id`：一段多轮会话；
-- `trace_id`：当前单轮问答。
-
-当前 Trace 可覆盖：
-
-- LangGraph 完整工作流；
-- 节点执行链路与耗时；
-- BGE-M3 向量生成；
-- Milvus 检索；
-- RRF 和 Reranker；
-- LLM 请求、响应与 Token；
-- 最终回答；
-- 自动基础评分；
-- 用户点赞或点踩。
-
-问答结束后，`trace_id` 同时返回给前端并写入 MongoDB，便于从页面反馈追溯到 Langfuse 中的具体调用链路。
-
----
-
-## Reranker 切换
-
-### BGE Reranker
-
-```env
-RERANKER_PROVIDER=bge
-RERANKER_MODEL=BAAI/bge-reranker-v2-m3
-RERANKER_DEVICE=cuda:0
-RERANKER_USE_FP16=true
-```
-
-### Qwen3 Reranker
-
-```env
-RERANKER_PROVIDER=qwen
-RERANKER_MODEL=Qwen/Qwen3-Reranker-0.6B
-RERANKER_DEVICE=cuda:0
-RERANKER_USE_FP16=true
-```
-
-Provider 使用单例缓存，同一进程中不会为每次请求重复加载模型。
 
 ---
 
 ## 常见问题
 
-### 1. MinerU 报错 `Can not find $env:CUDA_PATH`
+### 启动脚本提示模型配置未完成
 
-说明系统能够识别显卡，但没有完整安装 CUDA Toolkit，或当前终端没有读取到环境变量。
-
-```powershell
-$env:CUDA_PATH="C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6"
-$env:CUDA_HOME=$env:CUDA_PATH
-$env:Path="$env:CUDA_PATH\bin;$env:Path"
-
-nvcc --version
-```
-
-### 2. `torch.cuda.is_available()` 返回 `False`
-
-先检查是否误装 CPU 版 PyTorch：
-
-```powershell
-python -c "import torch; print(torch.__version__); print(torch.version.cuda); print(torch.cuda.is_available())"
-```
-
-版本包含 `+cpu` 时，需要根据本机 CUDA 和 PyTorch 版本重新安装对应 CUDA Wheel。
-
-### 3. MinerU 返回 `Language auto not supported`
-
-当前语言参数不能配置为 `auto`，使用：
+编辑根目录 `.env`，至少填写：
 
 ```env
-MINERU_LANGUAGE=ch_server
+OPENAI_BASE_URL=服务商的OpenAI兼容BaseURL
+OPENAI_API_KEY=真实密钥
+LLM_DEFAULT_MODEL=有权限调用的模型ID
 ```
 
-`MINERU_PARSE_METHOD=auto` 可以继续保留。
+健康接口只能证明 FastAPI 进程存活，不能证明模型 Key 有效，因此脚本会在启动前阻止空配置。
 
-### 4. MinerU 択错 `PageChars object is not iterable`
+### 容器连接 `localhost` 被拒绝
 
-升级到已兼容新版 `pdftext` 的 MinerU：
+检查 `.env` 是否混用了宿主机地址和容器地址。应用容器连接 MongoDB、MinIO、Milvus 时应分别使用 `mongo`、`minio`、`milvus`；只有连接宿主机 MinerU 时使用 `host.docker.internal`。
 
-```powershell
-uv pip install --upgrade "mineru[all]==3.4.4"
-```
-
-升级后再次检查 PyTorch 是否被依赖解析器替换为 CPU 版本。
-
-### 5. Milvus 入库缺少 `dense_vector`
-
-说明 BGE-M3 节点未成功生成向量，重点检查：
-
-- `BGE_M3_PATH`；
-- `BGE_DEVICE`；
-- 模型是否完整下载；
-- GPU 显存是否充足；
-- `torch.cuda.is_available()`；
-- 日志中的 `node_bge_embedding` 异常。
-
-### 6. 查询服务启动时 MongoDB 报错
+### 浏览器打不开回答中的图片
 
 检查：
 
 ```env
-MONGO_URL=mongodb://127.0.0.1:27017
-MONGO_DB_NAME=equipment_rag
+MINIO_ENDPOINT=minio:9000
+MINIO_PUBLIC_ENDPOINT=localhost:9000
+MINIO_REGION=us-east-1
+MINIO_PUBLIC_READ=false
 ```
 
-并确认 MongoDB 端口可访问。
+`MINIO_PUBLIC_ENDPOINT` 必须是浏览器能访问的地址，不能写成 Docker 服务名 `minio:9000`。
 
-### 7. MCP 搜索结果为空
+### 百炼 WebSearch 返回 `401 Unauthorized`
 
-检查：
+- 确认已在百炼 MCP 广场开通 WebSearch；
+- 使用有 MCP 权限的通用 API Key，不要使用不兼容的专属 Token；
+- Key 中不要手工添加 `Bearer `；
+- 不需要联网搜索时把 `MCP_DASHSCOPE_BASE_URL` 留空，系统会只使用本地知识库。
 
-- `MCP_DASHSCOPE_BASE_URL`；
-- `OPENAI_API_KEY`；
-- MCP SSE 地址是否可访问；
-- 服务端工具名称是否为 `bailian_web_search`。
+### 修改 MongoDB 或 Langfuse 密码后仍认证失败
+
+持久化数据卷保留了数据库创建时的旧凭据，修改 `.env` 不会自动修改数据库用户。优先使用 `start-all.ps1` 的非破坏性同步和健康检查，或按数据库管理流程修改已有用户；不要直接删除含业务数据的卷。
+
+### 首次问答很慢
+
+BGE-M3 与 Reranker 第一次加载需要下载并初始化模型。模型会保存到 `model-cache` 命名卷，后续容器重建通常不需要重新下载。
+
+### `torch.cuda.is_available()` 返回 `False`
+
+默认主项目镜像使用 CPU 版 PyTorch，这是为了降低首次运行门槛。需要 GPU 时必须同时准备 NVIDIA 驱动、Docker GPU Runtime、匹配的 CUDA PyTorch，并把设备配置改成 `cuda:0`；只修改 `.env` 不会自动把 CPU Wheel 变成 CUDA Wheel。
 
 ---
 
-## 当前限制
+## 生产部署提醒
 
-1. **Neo4j 查询仍为预留节点**：当前 `node_query_kg` 尚未实现实际图谱查询和结果返回；
-2. **SSE 连接和节点展示进度仍为进程内数据**：运行注册表与 checkpoint 已持久化，但自动分布式队列调度尚未接入；
-3. **本地模式不构成生产认证边界**：本地默认免 API Key，生产模式会强制 API Key；
-4. **当前授权粒度为租户与角色**：尚未细化到单台设备、文档和字段级 ABAC；
-5. **历史数据需要迁移**：启用生产多租户前，需要为旧 MongoDB/Milvus 数据分配租户或重新导入；
-6. **联网结果与本地 SOP 的可信级别尚未强制分层**；
-7. **当前评测集为合成冒烟基线**：上线前仍需使用经过脱敏和授权的企业设备数据扩充；
-8. **当前认证面向服务调用方**：企业终端用户 SSO/OIDC、用户生命周期和细粒度审计仍需接入统一身份平台；
-9. **本项目用于知识检索和辅助判断，不应直接替代设备安全规范、锁机挂牌流程或专业工程师确认。**
+- 设置 `APP_ENVIRONMENT=production` 和 `AUTH_MODE=api_key`；
+- 为不同工厂或客户分配不同 `tenant_id`；
+- 更换 MongoDB、MinIO、Grafana 和 Langfuse 的本地默认密码；
+- 保持 `MINIO_PUBLIC_READ=false`，通过 HTTPS 域名提供短期签名 URL；
+- 限制 `BIND_ADDRESS`、CORS、防火墙和反向代理访问范围；
+- 备份命名卷及 `deploy/langfuse/.env`，尤其是 `ENCRYPTION_KEY`；
+- 不要把客户文档、生产 Trace、评测数据或密钥提交到公开仓库。
+
+完整检查项见 [docs/security.md](docs/security.md)。
 
 ---
 
 ## Roadmap
 
-- [ ] 完成 Neo4j 设备实体关系检索；
-- [ ] 增加厂区、设备型号、软件版本、PLC 版本等元数据过滤；
-- [ ] 增加本地 SOP 优先级和联网资料可信等级；
-- [ ] 增加严格拒答与人工审核闭环；
-- [x] 接入 API Key、角色和租户级数据隔离；
-- [ ] 接入企业 OIDC/SSO 与用户生命周期管理；
-- [ ] 增加设备、文档和字段级 ABAC 策略；
-- [x] 增加 MongoDB 运行注册表、LangGraph checkpoint 和失败恢复；
-- [x] 建立确定性评测数据集和自动回归门禁；
-- [ ] 增加设备告警分析 Agent；
-- [ ] 增加 OEE 分析 Agent 与 ECharts 展示；
-- [x] 增加 Docker Compose 一键启动方案；
-- [x] 建立单元测试、覆盖率和 CI 质量门禁；
-
----
-
-## 开发规范
-
-- 新增 Agent 节点时同步更新对应的 `State`；
-- 节点必须记录开始、完成和异常日志；
-- 配置统一从 `.env` 读取，不在代码中提交密码和 Token；
-- 模型实例使用单例缓存，避免重复加载；
-- 写入 Milvus 前必须校验向量字段；
-- 外部工具异常应降级为空结果，不阻断核心本地检索；
-- Prompt 修改后应执行固定问题集回归测试；
-- 生产环境必须启用认证、限制 CORS，并保持 MinIO 私有读取。
-
----
-
-## Git 分支建议
-
-```text
-main        稳定版本
-feature/*   独立功能分支
-fix/*       问题修复分支
-```
-
-推荐所有升级通过 Pull Request 合并到 `main`，合并前至少执行：
-
-```bash
-uv sync --frozen
-docker compose config --quiet
-uv pip check
-uv run python -m compileall -q app
-```
+- [ ] 完成 Neo4j 设备实体关系检索
+- [ ] 增加厂区、型号、软件版本和 PLC 版本等元数据过滤
+- [ ] 建立本地 SOP 与联网资料的可信等级
+- [ ] 增加严格拒答、人工审核和企业 OIDC/SSO
+- [ ] 增加设备告警分析与 OEE 分析 Agent
+- [x] API Key、角色和租户级数据隔离
+- [x] MongoDB 运行注册表、LangGraph Checkpoint 和失败恢复
+- [x] 确定性评测、覆盖率和自动回归门禁
+- [x] Langfuse、Prometheus、Grafana 与一键运维脚本
 
 ---
 
 ## License
 
-当前仓库尚未提供 `LICENSE` 文件。在正式开放复用或接受外部贡献前，建议补充明确的开源许可证。
-
----
+当前仓库尚未提供 `LICENSE` 文件。在正式开放复用或接受外部贡献前，请先补充明确的许可证。
 
 ## 作者
 
