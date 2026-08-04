@@ -163,7 +163,6 @@ def run_query_graph(
                 )
 
         set_task_result(internal_session_id, "trace_id", trace_id)
-        update_task_status(internal_session_id, TASK_STATUS_COMPLETED, is_stream)
 
         retrieved_source_ids = []
         for doc in final_state.get("reranked_docs") or []:
@@ -184,6 +183,26 @@ def run_query_graph(
                 "visual": visual_summary,
             },
         )
+
+        # 必须等LangGraph全部节点（包括node_answer_output的finally）完成后，才能把本轮标记为完成。
+        # 先推送completed进度，再推送final；前端收到final后会主动关闭SSE连接，如果顺序相反，
+        # 最后一个完成进度就会丢失并永久显示“进行中1”。
+        update_task_status(internal_session_id, TASK_STATUS_COMPLETED, is_stream)
+        if is_stream:
+            push_to_session(
+                internal_session_id,
+                SSEEvent.FINAL,
+                {
+                    "answer": final_state.get("answer") or "",
+                    "status": TASK_STATUS_COMPLETED,
+                    "done_list": get_done_task_list(internal_session_id),
+                    "running_list": get_running_task_list(internal_session_id),
+                    "image_urls": final_state.get("image_urls") or [],
+                    "trace_id": trace_id,
+                    "need_visual_reasoning": bool(final_state.get("need_visual_reasoning")),
+                    "image_reasoning_status": final_state.get("image_reasoning_status") or "not_required",
+                },
+            )
 
         logger.info(
             f"问答流程执行完成，session_id={session_id}，trace_id={trace_id}，"
@@ -246,6 +265,9 @@ async def query(
     )
 
     is_stream = request.is_stream
+    # 任务追踪以session_id为键，因此同一会话每发起一个新问题都必须先清空上一轮节点列表。
+    # 这只清理进程内的“进度显示”，不会删除MongoDB聊天记录、向量数据或运行审计记录。
+    clear_task(internal_session_id)
     if is_stream:
         create_sse_queue(internal_session_id)
     update_task_status(internal_session_id, TASK_STATUS_PROCESSING, is_stream)
@@ -288,7 +310,10 @@ async def query(
         "retrieved_source_ids": run_record.result.get("retrieved_source_ids", []),
         "clarified": run_record.result.get("clarified", False),
         "visual": run_record.result.get("visual", {}),
-        "done_list": [],
+        "image_urls": final_state.get("image_urls") or [],
+        "status": get_task_status(internal_session_id),
+        "done_list": get_done_task_list(internal_session_id),
+        "running_list": get_running_task_list(internal_session_id),
     }
 
 
@@ -320,8 +345,11 @@ async def retry_run(
     session_id = str(run.input["session_id"])
     internal_session_id = scoped_session_id(principal.tenant_id, session_id)
     is_stream = bool(run.input.get("is_stream", False))
+    # 重试也是一轮新的执行进度，不能继承失败前或更早轮次的节点列表。
+    clear_task(internal_session_id)
     if is_stream:
         create_sse_queue(internal_session_id)
+    update_task_status(internal_session_id, TASK_STATUS_PROCESSING, is_stream)
     background_tasks.add_task(
         run_query_graph,
         session_id,

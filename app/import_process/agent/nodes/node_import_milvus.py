@@ -1,4 +1,4 @@
-import os
+﻿import os
 import sys
 from typing import List, Dict, Any
 # 导入Milvus相关依赖
@@ -121,8 +121,7 @@ def create_collection(client, collection_name: str, vector_dimension: int):
         vector_dimension: int - 稠密向量维度（与向量化模型保持一致）
     """
     # 1. 创建Schema：自增主键+支持动态字段，适配灵活的业务扩展
-    schema = client.create_schema(auto_id=True, enable_dynamic_fields=True)
-
+    schema = client.create_schema(auto_id=True, enable_dynamic_field=True)
     # 2. 新增字段：业务字段+主键+双向量字段，字段类型/长度适配业务场景
     schema.add_field(field_name="chunk_id", datatype=DataType.INT64, is_primary=True, auto_id=True)
     schema.add_field(field_name="content", datatype=DataType.VARCHAR, max_length=65535)  # 切片内容

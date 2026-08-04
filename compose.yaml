@@ -62,6 +62,12 @@ x-app-environment: &app-environment
   RAG_RERANK_MIN_TOPK: ${RAG_RERANK_MIN_TOPK:-1}
   RAG_RERANK_GAP_RATIO: ${RAG_RERANK_GAP_RATIO:-0.25}
   RAG_RERANK_GAP_ABS: ${RAG_RERANK_GAP_ABS:-0.5}
+  # 没有明确型号代码时，商品名称向量匹配达到此分数且明显领先第二名才自动确认。
+  RAG_ITEM_NAME_AUTO_CONFIRM_SCORE: ${RAG_ITEM_NAME_AUTO_CONFIRM_SCORE:-0.90}
+  # Top1至少领先Top2多少才允许自动确认，可防止两个相近设备分数接近时误选第一名。
+  RAG_ITEM_NAME_AUTO_CONFIRM_MARGIN: ${RAG_ITEM_NAME_AUTO_CONFIRM_MARGIN:-0.08}
+  # 未达到自动确认条件但达到此分数时，只向用户展示候选并要求澄清。
+  RAG_ITEM_NAME_CANDIDATE_SCORE: ${RAG_ITEM_NAME_CANDIDATE_SCORE:-0.78}
   # Milvus、MongoDB 和可恢复 Agent 运行。
   MILVUS_URL: ${MILVUS_URL:-http://milvus:19530}
   CHUNKS_COLLECTION: ${CHUNKS_COLLECTION:-equipment_chunks}
@@ -85,6 +91,8 @@ x-app-environment: &app-environment
   MINIO_IMG_DIR: ${MINIO_IMG_DIR:-images}
   MINIO_PDF_DIR: ${MINIO_PDF_DIR:-pdf_files}
   MINIO_SECURE: ${MINIO_SECURE:-false}
+  # 明确区域后，容器内可直接为localhost等浏览器公开地址生成签名URL，无需反向连接该地址。
+  MINIO_REGION: ${MINIO_REGION:-us-east-1}
   MINIO_PUBLIC_READ: ${MINIO_PUBLIC_READ:-false}
   MINIO_PRESIGNED_URL_TTL_SECONDS: ${MINIO_PRESIGNED_URL_TTL_SECONDS:-3600}
   # 宿主机上独立运行的 MinerU PDF 解析服务。
@@ -110,6 +118,8 @@ x-app-environment: &app-environment
   MCP_DASHSCOPE_TRANSPORT: ${MCP_DASHSCOPE_TRANSPORT:-streamable_http}
   MCP_DASHSCOPE_TOOL_NAME: ${MCP_DASHSCOPE_TOOL_NAME:-bailian_web_search}
   LANGFUSE_TRACING_ENABLED: ${LANGFUSE_TRACING_ENABLED:-false}
+  # Trace仅保存图片数量、状态和定位摘要；禁止SDK扫描并上传Base64媒体，避免容器访问宿主机公开MinIO地址失败。
+  LANGFUSE_MEDIA_UPLOAD_ENABLED: ${LANGFUSE_MEDIA_UPLOAD_ENABLED:-false}
   LANGFUSE_HOST: ${LANGFUSE_HOST:-http://host.docker.internal:3000}
   LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
   LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
@@ -214,6 +224,7 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-equipment}
       MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-equipment-local}
+      MINIO_REGION_NAME: ${MINIO_REGION:-us-east-1}
     command: minio server /minio_data --console-address ":9001"
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${MINIO_API_PORT:-9000}:9000"

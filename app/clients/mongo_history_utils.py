@@ -8,7 +8,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 # 导入pymongo核心模块：MongoDB原生Python驱动，实现数据库连接和操作
 # ASCENDING：表示升序排序，用于MongoDB索引和查询排序
-from pymongo import MongoClient, ASCENDING
+from pymongo import ASCENDING, DESCENDING, MongoClient
 # 导入bson的ObjectId：MongoDB默认的主键类型，用于唯一标识文档
 from bson import ObjectId
 # 导入dotenv模块：用于从.env文件加载环境变量，避免硬编码敏感配置（如MongoDB连接地址）
@@ -122,7 +122,8 @@ def save_chat_message(session_id: str,
     :param trace_id: 当前回答对应的Langfuse Trace ID，用户消息通常为空
     :return: 插入/更新的记录唯一标识（新增返回ObjectId字符串，更新返回传入的message_id）
     """
-    # 生成当前时间的时间戳（秒级），用于记录消息的创建时间，后续用于排序和查询
+    # 生成创建时间。注意：只有“新增”消息才能写入该时间；更新消息时必须保留原始时间，
+    # 否则用户消息会在处理结束时被移动到助手回答后面，导致下一轮LLM看到错误的对话顺序。
     ts = datetime.now().timestamp()
 
     # 构造要插入/更新的文档数据（MongoDB的基本数据单元是文档，类似Python字典）
@@ -150,9 +151,16 @@ def save_chat_message(session_id: str,
     # 判断是否传入主键ID，区分更新/新增逻辑
     if message_id:
         # 有message_id：执行更新操作（根据主键更新）
+        # 不更新ts：message_id模式是补充同一条用户消息的重写结果和设备名，不是创建新消息。
+        # 保留最初插入的ts才能保证历史记录始终是“用户问题 -> 助手回答”的顺序。
+        update_document = {
+            key: value
+            for key, value in document.items()
+            if key != "ts"
+        }
         result = mongo_tool.chat_message.update_one(
             {"_id": ObjectId(message_id)},  # 更新条件：主键匹配（需将字符串转为ObjectId类型）
-            {"$set": document}  # 更新操作：$set表示只更新指定字段，保留其他字段
+            {"$set": update_document}  # 更新操作：$set表示只更新指定字段，保留原始创建时间
         )
         # 更新操作返回传入的message_id作为标识
         return message_id
@@ -257,12 +265,13 @@ def get_recent_messages(session_id: str, limit: int = 10) -> List[Dict[str, Any]
         # 构造查询条件：仅查询指定session_id的记录
         query = {"session_id": session_id}
 
-        # 执行查询：按时间戳升序排序，限制返回条数
-        # find(query)：获取符合条件的游标（惰性加载，不立即查询）
-        # sort("ts", ASCENDING)：按ts字段升序（从旧到新），适配LLM上下文顺序
-        # limit(limit)：限制返回的最大条数
-        cursor = mongo_tool.chat_message.find(query).sort("ts", ASCENDING).limit(limit)
-        return [_to_serializable(message) for message in cursor]
+        # 必须先按时间倒序截取“最新N条”，再在内存中反转为“从旧到新”。
+        # 原实现是ASCENDING后直接limit，会一直返回会话最早N条；会话超过N条后，
+        # 新问题永远看不到最近上下文，并被几天前讨论过的设备型号污染。
+        cursor = mongo_tool.chat_message.find(query).sort("ts", DESCENDING).limit(limit)
+        recent_messages = [_to_serializable(message) for message in cursor]
+        recent_messages.reverse()
+        return recent_messages
     except Exception as e:
         # 捕获查询异常，记录错误日志
         logging.error(f"Error getting recent messages: {e}")

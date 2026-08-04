@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from app.utils.sse_utils import (
     SSEEvent,
     _sse_pack,
@@ -7,7 +9,13 @@ from app.utils.sse_utils import (
     get_sse_queue,
     push_to_session,
     remove_sse_queue,
+    sse_generator,
 )
+
+
+class _ConnectedRequest:
+    async def is_disconnected(self):
+        return False
 
 
 def test_sse_pack_preserves_event_and_unicode_payload():
@@ -34,4 +42,21 @@ def test_sse_queue_lifecycle():
     finally:
         remove_sse_queue(session_id)
 
+    assert get_sse_queue(session_id) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_event", [SSEEvent.FINAL, SSEEvent.ERROR])
+async def test_sse_generator_stops_and_cleans_queue_after_terminal_event(terminal_event):
+    session_id = f"terminal-{terminal_event}"
+    create_sse_queue(session_id)
+    push_to_session(session_id, terminal_event, {"status": terminal_event})
+    stream = sse_generator(session_id, _ConnectedRequest())
+
+    assert (await anext(stream)).startswith("event: ready\n")
+    terminal_payload = await anext(stream)
+    assert terminal_payload.startswith(f"event: {terminal_event}\n")
+
+    with pytest.raises(StopAsyncIteration):
+        await anext(stream)
     assert get_sse_queue(session_id) is None

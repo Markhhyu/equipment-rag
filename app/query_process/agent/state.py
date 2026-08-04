@@ -22,6 +22,9 @@ class QueryGraphState(TypedDict, total=False):
 
     # 设备或商品识别结果。
     item_names: List[str]
+    # 当向量检索只能得到候选、尚未得到用户确认时暂存在这里。
+    # 该字段会写入澄清助手消息，供下一轮“是的/就是这个”恢复单个候选。
+    pending_item_names: List[str]
 
     # 多路检索中间结果。
     embedding_chunks: list
@@ -40,6 +43,10 @@ class QueryGraphState(TypedDict, total=False):
     image_assets: List[Dict[str, Any]]
     image_analysis_context: str
     image_reasoning_object_uris: List[str]
+    # 最终答案节点实际使用的稳定MinIO引用，以及返回给浏览器的短期签名URL。
+    # 这两个字段必须声明在LangGraph状态中，否则节点内虽然生成成功，合并状态时仍会被丢弃。
+    image_object_refs: List[str]
+    image_urls: List[str]
     image_reasoning_error: str
 
     # 最终生成结果。

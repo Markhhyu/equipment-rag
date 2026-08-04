@@ -21,6 +21,14 @@ def _get_float(name: str, default: float, *, minimum: float = 0.0) -> float:
         return default
 
 
+def _get_score(name: str, default: float) -> float:
+    """读取0到1之间的分数配置；越界或格式错误时自动使用安全范围。"""
+    try:
+        return min(1.0, max(0.0, float(os.getenv(name, str(default)))))
+    except (TypeError, ValueError):
+        return default
+
+
 @dataclass(frozen=True)
 class RagTuningConfig:
     """影响解析、召回、融合和重排效果的集中配置。
@@ -43,6 +51,11 @@ class RagTuningConfig:
     rerank_min_topk: int
     rerank_gap_ratio: float
     rerank_gap_abs: float
+    # 商品名称向量对齐阈值。明确型号token一致时不依赖这些分数，
+    # 这些值只控制中文名称等“没有明确型号代码”的语义匹配。
+    item_name_auto_confirm_score: float
+    item_name_auto_confirm_margin: float
+    item_name_candidate_score: float
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -69,6 +82,13 @@ def load_rag_tuning_config() -> RagTuningConfig:
     # 最终结果数不能超过每一路最初召回的候选数。
     result_limit = min(_get_int("RAG_RETRIEVAL_RESULT_LIMIT", 5), candidate_limit)
 
+    # 候选阈值不能高于自动确认阈值，否则会出现“低分自动确认、高分反而要求澄清”的反直觉区间。
+    item_name_auto_confirm_score = _get_score("RAG_ITEM_NAME_AUTO_CONFIRM_SCORE", 0.90)
+    item_name_candidate_score = min(
+        _get_score("RAG_ITEM_NAME_CANDIDATE_SCORE", 0.78),
+        item_name_auto_confirm_score,
+    )
+
     return RagTuningConfig(
         chunk_max_chars=chunk_max,
         chunk_min_chars=chunk_min,
@@ -84,6 +104,9 @@ def load_rag_tuning_config() -> RagTuningConfig:
         rerank_min_topk=rerank_min,
         rerank_gap_ratio=_get_float("RAG_RERANK_GAP_RATIO", 0.25),
         rerank_gap_abs=_get_float("RAG_RERANK_GAP_ABS", 0.5),
+        item_name_auto_confirm_score=item_name_auto_confirm_score,
+        item_name_auto_confirm_margin=_get_score("RAG_ITEM_NAME_AUTO_CONFIRM_MARGIN", 0.08),
+        item_name_candidate_score=item_name_candidate_score,
     )
 
 

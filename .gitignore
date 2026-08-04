@@ -11,6 +11,9 @@ htmlcov/
 build/
 logs/
 output/
+# 一键启动脚本在此创建 MinerU 本地虚拟环境、日志、解析输出和 PID 文件。
+# 这些内容与机器和运行状态绑定，不应提交到仓库。
+deploy/mineru-runtime/
 .idea/
 .vscode/
 .DS_Store

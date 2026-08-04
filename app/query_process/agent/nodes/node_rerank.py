@@ -2,9 +2,11 @@ import sys
 from typing import Any, Dict, List
 
 from app.conf.rag_tuning_config import rag_tuning_config
+from app.conf.image_processing_config import image_processing_config
 from app.core.logger import logger
 from app.lm.reranker_utils import get_reranker_model
 from app.observability.rag_observability import start_rag_observation, summarize_rerank_docs
+from app.query_process.agent.nodes.node_image_reasoning import is_visual_question
 from app.utils.task_utils import add_done_task, add_running_task
 
 
@@ -170,8 +172,60 @@ def step_2_rerank_docs(state, doc_items: List[Dict[str, Any]]) -> List[Dict[str,
         ]
 
 
-def step_3_topk(scored_docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """根据配置上限和相邻分数断崖动态截取TopK，同时保持文档完整元数据。"""
+def _preserve_visual_documents(
+    scored_docs: List[Dict[str, Any]],
+    topk_docs: List[Dict[str, Any]],
+    max_topk: int,
+) -> List[Dict[str, Any]]:
+    """
+    为明确的图片问题保留少量高相关图片Chunk，同时不突破Reranker上下文上限。
+
+    动态分数断崖可能只留下一个纯文本Chunk；图片选择节点随后就完全看不到已经召回的
+    图片资产。这里优先利用尚未占满的TopK槽位补入图片Chunk；槽位已满时，从末尾替换
+    最低分的非图片Chunk，但始终保护Top1文本依据，避免为了返回图片破坏核心答案质量。
+    """
+    selected_docs = list(topk_docs)
+    selected_object_ids = {id(document) for document in selected_docs}
+    selected_image_count = sum(1 for document in selected_docs if document.get("has_images"))
+    desired_image_count = min(image_processing_config.query_image_top_k, max_topk)
+
+    if selected_image_count >= desired_image_count:
+        return selected_docs
+
+    for candidate in scored_docs:
+        if selected_image_count >= desired_image_count:
+            break
+        if id(candidate) in selected_object_ids or not candidate.get("has_images"):
+            continue
+
+        if len(selected_docs) < max_topk:
+            selected_docs.append(candidate)
+        else:
+            replacement_index = next(
+                (
+                    index
+                    for index in range(len(selected_docs) - 1, 0, -1)
+                    if not selected_docs[index].get("has_images")
+                ),
+                None,
+            )
+            if replacement_index is None:
+                break
+            selected_docs[replacement_index] = candidate
+
+        selected_object_ids.add(id(candidate))
+        selected_image_count += 1
+
+    selected_docs.sort(key=lambda item: float(item.get("score") or 0.0), reverse=True)
+    return selected_docs
+
+
+def step_3_topk(
+    scored_docs: List[Dict[str, Any]],
+    *,
+    preserve_image_docs: bool = False,
+) -> List[Dict[str, Any]]:
+    """根据配置上限和相邻分数断崖动态截取TopK，并按视觉意图保留图片元数据。"""
     if not scored_docs:
         return []
 
@@ -194,6 +248,16 @@ def step_3_topk(scored_docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 break
 
     topk_docs = scored_docs[:topk]
+    if preserve_image_docs:
+        original_count = len(topk_docs)
+        original_image_count = sum(1 for item in topk_docs if item.get("has_images"))
+        topk_docs = _preserve_visual_documents(scored_docs, topk_docs, max_topk)
+        added_image_count = sum(1 for item in topk_docs if item.get("has_images")) - original_image_count
+        if added_image_count > 0:
+            logger.info(
+                f"视觉问题保留图片Chunk：动态TopK={original_count}，"
+                f"补充图片文档={added_image_count}，最终文档={len(topk_docs)}"
+            )
     logger.info(
         f"Reranker动态截断完成，保留文档={len(topk_docs)}，"
         f"其中含图片文档={sum(1 for item in topk_docs if item.get('has_images'))}"
@@ -209,6 +273,7 @@ def node_rerank(state):
 
     try:
         question = str(state.get("rewritten_query") or state.get("original_query") or "").strip()
+        preserve_image_docs = is_visual_question(question)
         doc_items = step_1_merge_docs(state)
 
         with start_rag_observation(
@@ -220,10 +285,11 @@ def node_rerank(state):
                 "min_topk": RERANK_MIN_TOPK,
                 "gap_ratio": RERANK_GAP_RATIO,
                 "gap_abs": RERANK_GAP_ABS,
+                "preserve_image_docs": preserve_image_docs,
             },
         ) as rerank_observation:
             scored_docs = step_2_rerank_docs(state, doc_items)
-            topk_docs = step_3_topk(scored_docs)
+            topk_docs = step_3_topk(scored_docs, preserve_image_docs=preserve_image_docs)
             if rerank_observation is not None:
                 rerank_observation.update(
                     output={

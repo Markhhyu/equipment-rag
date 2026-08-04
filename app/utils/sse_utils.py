@@ -93,6 +93,12 @@ async def sse_generator(session_id: str, request: Request):
                 break
 
             yield _sse_pack(event, data)
+
+            # final/error 都是本轮流的终止事件。服务端发送后立即结束生成器，
+            # 不再依赖浏览器主动调用EventSource.close()，避免客户端先断开时
+            # Starlette记录“No response returned”的无效异常，并确保队列及时清理。
+            if event in {SSEEvent.FINAL, SSEEvent.ERROR}:
+                break
     except (asyncio.CancelledError, ConnectionResetError, BrokenPipeError):
         print(f"[SSE] Client disconnected (Cancelled/Reset/Pipe): {session_id}")
         # 生成器被取消/对端断开：静默退出

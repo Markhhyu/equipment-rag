@@ -81,7 +81,9 @@ function Invoke-DockerCommand {
 function Get-DotEnvValue {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
-        [Parameter(Mandatory = $true)][string]$DefaultValue
+        # 部分安全校验需要用空字符串表示“没有默认值”。AllowEmptyString让PowerShell
+        # 接受这种调用，否则参数绑定会在真正的配置检查前提前失败。
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$DefaultValue
     )
 
     # 进程环境变量优先级最高，随后读取根目录 .env，最后才使用脚本内默认值。
@@ -118,6 +120,69 @@ function Get-DotEnvValue {
     }
 
     return $DefaultValue
+}
+
+function Get-DotEnvFileValue {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$DefaultValue
+    )
+
+    # 这个函数专门读取指定的 .env 文件。Langfuse 使用独立的
+    # deploy/langfuse/.env，不能复用只读取仓库根目录 .env 的 Get-DotEnvValue。
+    # 解析时仅按第一个等号分隔，因此 URL 或密码后半段即使含有等号也不会被截断。
+    if (Test-Path -LiteralPath $Path) {
+        foreach ($line in Get-Content -LiteralPath $Path) {
+            $trimmed = $line.Trim()
+            if ($trimmed.StartsWith("#") -or $trimmed.IndexOf("=") -le 0) {
+                continue
+            }
+
+            $separatorIndex = $trimmed.IndexOf("=")
+            if ($trimmed.Substring(0, $separatorIndex).Trim() -ne $Name) {
+                continue
+            }
+
+            $value = $trimmed.Substring($separatorIndex + 1).Trim()
+            if (
+                $value.Length -ge 2 -and
+                (($value.StartsWith('"') -and $value.EndsWith('"')) -or
+                 ($value.StartsWith("'") -and $value.EndsWith("'")))
+            ) {
+                $value = $value.Substring(1, $value.Length - 2)
+            }
+
+            return $value
+        }
+    }
+
+    return $DefaultValue
+}
+
+function Assert-LlmConfiguration {
+    <#
+    在启动容器前检查问答必需的模型配置。
+
+    /health只能证明FastAPI进程已经启动，不能证明模型密钥有效。旧逻辑允许空密钥继续启动，
+    最终页面显示“API已连接”，但用户第一次提问才看到配置错误。这里提前阻止这种假健康状态。
+    出于安全考虑，错误信息只显示缺失的变量名，绝不打印密钥内容。
+    #>
+    $apiKey = Get-DotEnvValue -Name "OPENAI_API_KEY" -DefaultValue ""
+    $baseUrl = Get-DotEnvValue -Name "OPENAI_BASE_URL" -DefaultValue ""
+    $modelName = Get-DotEnvValue -Name "LLM_DEFAULT_MODEL" -DefaultValue ""
+
+    $missingNames = @()
+    if ([string]::IsNullOrWhiteSpace($apiKey)) { $missingNames += "OPENAI_API_KEY" }
+    if ([string]::IsNullOrWhiteSpace($baseUrl)) { $missingNames += "OPENAI_BASE_URL" }
+    if ([string]::IsNullOrWhiteSpace($modelName)) { $missingNames += "LLM_DEFAULT_MODEL" }
+
+    if ($missingNames.Count -gt 0) {
+        throw (
+            "模型配置未完成，缺少：$($missingNames -join '、')。" +
+            "请编辑 $EnvFile；密钥只保存在本机，不要粘贴到聊天、日志或Git仓库。填写后重新运行 start-all.cmd。"
+        )
+    }
 }
 
 function New-SecureHex {
@@ -192,6 +257,62 @@ function Initialize-LangfuseEnvironment {
     Write-Host "请妥善备份此文件；丢失 ENCRYPTION_KEY 后可能无法读取已有加密数据。" -ForegroundColor Yellow
 }
 
+function Sync-LangfusePostgresPassword {
+    <#
+    PostgreSQL 只在“第一次创建数据卷”时读取 POSTGRES_PASSWORD。以后即使用户重新生成
+    deploy/langfuse/.env，已有数据卷里的数据库密码也不会自动变化。此时 PostgreSQL 健康，
+    但 Langfuse Web 会持续报 Prisma P1000，并在 Restarting 状态中反复退出。
+
+    这里通过 PostgreSQL 容器内部的本地 Unix Socket 连接执行 ALTER ROLE，把已有数据库
+    角色的密码同步为当前 .env 中的值。该操作不会删除数据库、Trace、用户或项目数据。
+    SQL 通过标准输入传入，不把密码放进 docker 命令参数，也不会在控制台打印密码。
+    #>
+    $postgresUser = Get-DotEnvFileValue -Path $LangfuseEnv -Name "POSTGRES_USER" -DefaultValue "postgres"
+    $postgresPassword = Get-DotEnvFileValue -Path $LangfuseEnv -Name "POSTGRES_PASSWORD" -DefaultValue ""
+    $postgresDatabase = Get-DotEnvFileValue -Path $LangfuseEnv -Name "POSTGRES_DB" -DefaultValue "postgres"
+    $databaseUrl = Get-DotEnvFileValue -Path $LangfuseEnv -Name "DATABASE_URL" -DefaultValue ""
+
+    if ([string]::IsNullOrWhiteSpace($postgresPassword)) {
+        throw "Langfuse 配置缺少 POSTGRES_PASSWORD：$LangfuseEnv"
+    }
+
+    # 一键脚本自动生成的是十六进制密码。限制可接受字符既能避免 URL 编码歧义，
+    # 也能阻止手工编辑 .env 时把引号或 SQL 片段误带入后面的 ALTER ROLE 语句。
+    if ($postgresPassword -notmatch '^[0-9a-fA-F]{32,256}$') {
+        throw "Langfuse 的 POSTGRES_PASSWORD 必须是 32 到 256 位十六进制字符；请按 .env.example 的说明重新生成。"
+    }
+
+    # 当前本地部署固定使用 postgres 用户和 postgres 数据库。保持这两个值固定，
+    # 可以确保旧数据卷、新 .env 与容器内本地管理员角色始终能够安全对齐。
+    if ($postgresUser -ne "postgres" -or $postgresDatabase -ne "postgres") {
+        throw "本地 Langfuse 一键部署要求 POSTGRES_USER 和 POSTGRES_DB 都为 postgres。"
+    }
+
+    $expectedDatabaseUrl = "postgresql://postgres:$postgresPassword@postgres:5432/postgres"
+    if ($databaseUrl -ne $expectedDatabaseUrl) {
+        throw "Langfuse 的 DATABASE_URL 与 POSTGRES_PASSWORD 不一致；请让两项使用同一个密码。"
+    }
+
+    Write-Host "同步 Langfuse PostgreSQL 凭据（不会删除已有数据）..."
+    $sql = "ALTER ROLE postgres WITH PASSWORD '$postgresPassword';"
+    $sql | & docker compose `
+        --project-name equipment-rag-langfuse `
+        --env-file $LangfuseEnv `
+        -f $LangfuseCompose `
+        exec -T postgres psql --username postgres --dbname postgres `
+        2>&1 | ForEach-Object {
+            # psql 成功时只会输出 ALTER ROLE。主动过滤后可以避免未来客户端版本
+            # 在诊断信息中意外回显 SQL；失败详情仍由下方的统一异常提示处理。
+            if ($_ -notmatch '^ALTER ROLE\s*$') { Write-Host $_ }
+        }
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "无法同步 Langfuse PostgreSQL 凭据，请检查 postgres 容器日志。"
+    }
+
+    Write-Host "Langfuse PostgreSQL 凭据已同步" -ForegroundColor Green
+}
+
 function Test-HttpService {
     param([Parameter(Mandatory = $true)][string]$Url)
 
@@ -208,7 +329,10 @@ function Wait-HttpService {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
         [Parameter(Mandatory = $true)][string]$Url,
-        [Parameter(Mandatory = $true)][int]$Timeout
+        [Parameter(Mandatory = $true)][int]$Timeout,
+        # 可选的容器名用于“快速失败”。例如进程已进入 Restarting 时，继续等待 HTTP
+        # 没有意义；脚本会立即输出该容器最近日志，让用户直接看到真正根因。
+        [AllowEmptyString()][string]$ContainerName = ""
     )
 
     $deadline = (Get-Date).AddSeconds($Timeout)
@@ -216,6 +340,15 @@ function Wait-HttpService {
         if (Test-HttpService -Url $Url) {
             Write-Host "$Name 已就绪：$Url" -ForegroundColor Green
             return
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($ContainerName)) {
+            $containerStatus = (Get-ContainerStatus -ContainerName $ContainerName).Trim()
+            if ($containerStatus -in @("restarting", "unhealthy", "exited", "dead")) {
+                Write-Host "$Name 容器异常，最近日志如下：" -ForegroundColor Red
+                & docker logs --tail 200 $ContainerName
+                throw "$Name 容器启动失败：$ContainerName，状态：$containerStatus"
+            }
         }
 
         Write-Host "等待 $Name：$Url"
@@ -436,8 +569,10 @@ try {
     Assert-FileExists -Path $EnvExampleFile
     if (-not (Test-Path -LiteralPath $EnvFile)) {
         Copy-Item -LiteralPath $EnvExampleFile -Destination $EnvFile
-        Write-Warning "已从 .env.example 创建 .env。服务可以启动，但调用模型前必须填写 OPENAI_API_KEY 等模型配置。"
+        Write-Warning "已从 .env.example 创建 .env。请先填写模型配置；脚本不会在密钥为空时继续启动。"
     }
+
+    Assert-LlmConfiguration
 
     # 先验证 Compose，尽早发现端口、缩进或变量格式错误，避免启动到一半才失败。
     Invoke-DockerCommand -DockerArgs @(
@@ -460,7 +595,21 @@ try {
             "--env-file", $LangfuseEnv, "-f", $LangfuseCompose,
             "up", "-d"
         )
-        Wait-HttpService -Name "Langfuse" -Url "http://127.0.0.1:3000/api/public/health" -Timeout $TimeoutSeconds
+        Wait-ContainerHealthy -ContainerName "equipment-rag-langfuse-postgres-1" -Timeout $TimeoutSeconds
+        Sync-LangfusePostgresPassword
+
+        # Web/Worker 可能已经用旧密码尝试连接并进入重试退避。凭据同步后主动重启二者，
+        # 让它们立即重新迁移和连接数据库，不必等待 Docker 的下一次自动重启周期。
+        Invoke-DockerCommand -DockerArgs @(
+            "compose", "--project-name", "equipment-rag-langfuse",
+            "--env-file", $LangfuseEnv, "-f", $LangfuseCompose,
+            "restart", "langfuse-web", "langfuse-worker"
+        )
+        Wait-HttpService `
+            -Name "Langfuse" `
+            -Url "http://127.0.0.1:3000/api/public/health" `
+            -Timeout $TimeoutSeconds `
+            -ContainerName "equipment-rag-langfuse-langfuse-web-1"
     }
 
     Write-Step "启动 MongoDB、MinIO 和 etcd"

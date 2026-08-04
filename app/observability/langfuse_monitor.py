@@ -18,6 +18,18 @@ langfuse = get_client() if LANGFUSE_ENABLED else None
 MONITOR_VERSION = "2.1"
 
 
+def rag_tuning_metadata() -> dict:
+    """将调优配置展开为Langfuse可检索的短metadata值。
+
+    Langfuse SDK会丢弃超过200字符的单个metadata值，因此不能把整份配置作为嵌套字典上传。
+    每项使用稳定前缀独立记录，既避免长度限制，也便于在Trace列表中筛选和比较实验参数。
+    """
+    return {
+        f"rag_tuning_{name}": value
+        for name, value in rag_tuning_config.to_dict().items()
+    }
+
+
 def create_query_trace_id() -> str:
     """
     为一次独立问答生成Langfuse Trace ID。
@@ -58,7 +70,7 @@ def trace_import(
                 "service": "import-service",
                 "tenant_id": tenant_id,
                 "monitor_version": MONITOR_VERSION,
-                "rag_tuning": rag_tuning_config.to_dict(),
+                **rag_tuning_metadata(),
             },
         ):
             yield observation, handler
@@ -96,7 +108,7 @@ def trace_query(
                 "service": "query-service",
                 "is_stream": is_stream,
                 "monitor_version": MONITOR_VERSION,
-                "rag_tuning": rag_tuning_config.to_dict(),
+                **rag_tuning_metadata(),
             },
         ):
             yield observation, handler

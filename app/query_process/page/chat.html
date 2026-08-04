@@ -1115,6 +1115,14 @@
 
                 try {
                     const d = JSON.parse(e.data || '{}');
+                    // final包本身携带完整进度，作为最后一次progress事件丢失时的兜底。
+                    // 后端保证此处status=completed且running_list为空。
+                    renderProgress(
+                        botMsgEl,
+                        d.done_list || [],
+                        d.running_list || [],
+                        d.status || 'completed'
+                    );
                     // 流式 delta 可能不包含“【图片】/图片列表”，最终包的 d.answer 才是完整答案；优先使用 d.answer
                     const finalText = (d && typeof d.answer === 'string' && d.answer.trim().length > 0) ? d.answer : (rawAnswerText || answerEl.textContent || '');
                     renderAnswerWithImages(answerEl, finalText, d.image_urls || []);

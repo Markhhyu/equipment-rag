@@ -2,7 +2,7 @@ import json
 import re
 
 import app.observability.quality_metrics as quality_metrics
-from app.observability.langfuse_monitor import create_query_trace_id
+from app.observability.langfuse_monitor import create_query_trace_id, rag_tuning_metadata
 from app.observability.rag_observability import observed_graph_node
 from app.observability.quality_metrics import analyze_chunks, analyze_import_state, analyze_query_state, stage_metrics
 
@@ -118,3 +118,13 @@ def test_trace_id_and_observed_node_work_when_langfuse_is_disabled():
     result = wrapped({"trace_id": trace_id})
 
     assert result == {"answer": "完成"}
+
+
+def test_rag_tuning_metadata_is_flat_and_within_langfuse_value_limit():
+    metadata = rag_tuning_metadata()
+
+    assert metadata
+    assert "rag_tuning" not in metadata
+    assert all(key.startswith("rag_tuning_") for key in metadata)
+    assert all(not isinstance(value, (dict, list)) for value in metadata.values())
+    assert all(len(str(value)) <= 200 for value in metadata.values())

@@ -277,7 +277,9 @@ def step_4_write_history(state: QueryGraphState, image_object_refs: List[str]) -
             role="assistant",
             text=answer,
             rewritten_query="",
-            item_names=state.get("item_names") or [],
+            # 正常回答保存已确认设备；澄清回答保存候选设备。
+            # 这样下一轮用户只回复“是的”时，型号确认节点才能读取并确认单个候选。
+            item_names=state.get("item_names") or state.get("pending_item_names") or [],
             image_urls=image_object_refs,
             message_id=None,
             trace_id=str(state.get("trace_id") or ""),
@@ -312,20 +314,6 @@ def node_answer_output(state: QueryGraphState) -> QueryGraphState:
         state["image_urls"] = image_urls
 
         step_4_write_history(state, image_object_refs)
-
-        if state.get("is_stream"):
-            push_to_session(
-                session_id,
-                SSEEvent.FINAL,
-                {
-                    "answer": state.get("answer") or "",
-                    "status": "completed",
-                    "image_urls": image_urls,
-                    "trace_id": state.get("trace_id") or "",
-                    "need_visual_reasoning": bool(state.get("need_visual_reasoning")),
-                    "image_reasoning_status": state.get("image_reasoning_status") or "not_required",
-                },
-            )
 
         logger.info(
             f"答案节点处理完成，答案字符数={len(state.get('answer') or '')}，"

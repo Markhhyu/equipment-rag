@@ -38,12 +38,17 @@ def _initialize_minio_clients():
                 access_key=minio_config.access_key,
                 secret_key=minio_config.secret_key,
                 secure=minio_config.minio_secure,
+                region=minio_config.region,
             )
             public_client = Minio(
                 endpoint=minio_config.public_endpoint,
                 access_key=minio_config.access_key,
                 secret_key=minio_config.secret_key,
                 secure=minio_config.minio_secure,
+                # 公开端点是返回给宿主机浏览器的地址，例如localhost:9000。
+                # 查询API位于容器内，不能连接自己的localhost。显式区域让SDK直接生成
+                # 预签名URL，不再访问公开端点执行GetBucketLocation。
+                region=minio_config.region,
             )
             bucket_name = minio_config.bucket_name
             if not private_client.bucket_exists(bucket_name):

@@ -19,6 +19,7 @@ class MinIOConfig:
     bucket_name: str  # 保存知识库文件和图片的桶；应用会按需创建。
     minio_img_dir: str  # 桶内图片对象前缀，不是宿主机目录。
     minio_secure: bool  # true 使用 HTTPS，必须与服务实际证书和端口一致。
+    region: str  # 签名URL使用的区域；明确设置后无需从浏览器公开端点查询桶位置。
 
 
 # 内部地址用于后端上传，公开地址用于把可访问图片 URL 返回给浏览器。
@@ -30,4 +31,5 @@ minio_config = MinIOConfig(
     bucket_name=os.getenv("MINIO_BUCKET_NAME") or "equipment-rag",
     minio_img_dir=os.getenv("MINIO_IMG_DIR") or "images",
     minio_secure=(os.getenv("MINIO_SECURE") or "false").lower() == "true",
+    region=(os.getenv("MINIO_REGION") or "us-east-1").strip(),
 )

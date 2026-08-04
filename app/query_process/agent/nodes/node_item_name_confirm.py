@@ -1,14 +1,14 @@
-import sys
 import os
 import json
-import logging
-from typing import List, Dict, Any, Optional
+import re
+from typing import Any, Dict, List, Optional, Tuple
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from app.core.load_prompt import load_prompt
+from app.conf.rag_tuning_config import rag_tuning_config
 from app.query_process.agent.state import QueryGraphState
 from app.utils.task_utils import add_running_task, add_done_task
-from app.clients.mongo_history_utils import get_recent_messages, save_chat_message, update_message_item_names
+from app.clients.mongo_history_utils import get_recent_messages, save_chat_message
 from app.lm.lm_utils import get_llm_client
 from app.lm.embedding_utils import generate_embeddings
 from app.clients.milvus_utils import get_milvus_client, create_hybrid_search_requests, hybrid_search
@@ -17,6 +17,132 @@ from app.core.logger import logger
 from app.security.tenancy import tenant_filter
 
 load_dotenv(find_dotenv())
+
+
+# 设备型号通常由英文字母和数字组成，并可能包含空格、短横线或下划线。
+# 这里故意不匹配纯中文商品名：中文名称仍交给LLM理解，明确的型号代码则由程序确定性处理，
+# 避免历史对话中的旧设备名称覆盖用户本轮已经写清楚的新型号。
+_MODEL_TOKEN_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9])([A-Za-z]{1,12}(?:[\s._-]*\d[A-Za-z0-9._-]*))(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+
+# 只有非常明确、且本身不包含新问题内容的肯定回复才会触发“确认上轮单个候选”。
+# 例如“是的”“就是这个”可以确认；“是的，但是我问的是PT770”不会被本规则截断，
+# 后者会继续由当前问题中的明确型号规则处理。
+_AFFIRMATIVE_REPLY_PATTERN = re.compile(
+    r"^(?:是|是的|对|对的|就是|就是这个|就是它|就是这款|确认|没错|可以|嗯|好的?)$"
+)
+
+
+def _unique_strings(values: List[str]) -> List[str]:
+    """按出现顺序去重，避免使用set导致候选型号顺序随机变化。"""
+    result: List[str] = []
+    seen = set()
+    for value in values or []:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
+
+
+def _normalize_item_name(value: str) -> str:
+    """移除空格和标点并统一小写，用于商品名的稳定词法比较。"""
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", str(value or "").casefold())
+
+
+def _extract_model_tokens(value: str) -> List[str]:
+    """
+    从文本中提取标准化设备型号。
+
+    示例：
+    - ``LJ2268/LJ2268W激光打印机`` -> ``["LJ2268", "LJ2268W"]``
+    - ``HAK 180烫金机`` -> ``["HAK180"]``
+    - ``RS-12`` -> ``["RS-12"]``（比较时会统一移除分隔符）
+    """
+    tokens: List[str] = []
+    for match in _MODEL_TOKEN_PATTERN.finditer(str(value or "")):
+        normalized = re.sub(r"[^A-Za-z0-9]+", "", match.group(1)).upper()
+        if normalized and normalized not in tokens:
+            tokens.append(normalized)
+    return tokens
+
+
+def _extract_explicit_item_names(query: str) -> List[str]:
+    """
+    提取当前问题里明确写出的型号，作为优先于LLM和历史记录的设备线索。
+
+    返回原始可读形式是为了让向量检索仍能使用用户输入；真正比较时会再标准化。
+    """
+    names = [re.sub(r"\s+", " ", match.group(1)).strip() for match in _MODEL_TOKEN_PATTERN.finditer(query or "")]
+    return _unique_strings(names)
+
+
+def _is_lexical_alias(extracted_name: str, candidate_name: str) -> bool:
+    """
+    判断检索候选是否是用户型号的词法别名。
+
+    型号token相交是最可靠的依据，例如LJ2268可以命中
+    “LJ2268/LJ2268W激光打印机”。没有型号时，只允许完整名称相等或较长名称包含关系。
+    """
+    extracted_tokens = set(_extract_model_tokens(extracted_name))
+    candidate_tokens = set(_extract_model_tokens(candidate_name))
+    if extracted_tokens and candidate_tokens:
+        return bool(extracted_tokens & candidate_tokens)
+
+    extracted_normalized = _normalize_item_name(extracted_name)
+    candidate_normalized = _normalize_item_name(candidate_name)
+    if not extracted_normalized or not candidate_normalized:
+        return False
+    if extracted_normalized == candidate_normalized:
+        return True
+    return len(extracted_normalized) >= 4 and (
+        extracted_normalized in candidate_normalized or candidate_normalized in extracted_normalized
+    )
+
+
+def _resolve_pending_confirmation(query: str, history: List[Dict]) -> Tuple[Optional[str], str]:
+    """
+    解析“是的/就是这个”对上轮单候选澄清的确认。
+
+    候选保存在助手历史消息的item_names字段中。只有上轮确实是澄清问题且只有一个候选时
+    才自动确认；多个候选时不能猜测用户选择了哪一个。第二个返回值是澄清前的用户问题，
+    用于把“是的”恢复成可检索的完整问题。
+    """
+    compact_query = re.sub(r"[\s，。！？、,.!?]+", "", str(query or ""))
+    if not _AFFIRMATIVE_REPLY_PATTERN.fullmatch(compact_query):
+        return None, ""
+
+    for index in range(len(history or []) - 1, -1, -1):
+        message = history[index]
+        if message.get("role") != "assistant":
+            continue
+        answer = str(message.get("text") or "")
+        candidates = _unique_strings(message.get("item_names") or [])
+        if "您是想问以下哪个产品" not in answer:
+            return None, ""
+        if len(candidates) != 1:
+            return None, ""
+
+        previous_query = ""
+        for previous in reversed(history[:index]):
+            if previous.get("role") == "user":
+                previous_query = str(previous.get("rewritten_query") or previous.get("text") or "").strip()
+                break
+        return candidates[0], previous_query
+
+    return None, ""
+
+
+def _rewrite_confirmed_question(item_name: str, previous_query: str) -> str:
+    """把简单肯定回复恢复成包含已确认型号的独立问题。"""
+    if previous_query:
+        if _is_lexical_alias(previous_query, item_name):
+            return previous_query
+        return f"关于{item_name}，{previous_query}"
+    return f"关于{item_name}的使用和维护问题"
 
 
 def step_3_extract_info(query: str, history: List[Dict]) -> Dict:
@@ -65,10 +191,11 @@ def step_3_extract_info(query: str, history: List[Dict]) -> Dict:
         
         result = json.loads(content)
         
-        # 健壮性检查
-        if "item_names" not in result:
+        # 健壮性检查：JSON字段类型不正确时回退，避免模型偶尔返回字符串导致后续逐字符检索。
+        if not isinstance(result.get("item_names"), list):
             result["item_names"] = []
-        if "rewritten_query" not in result:
+        result["item_names"] = _unique_strings(result["item_names"])
+        if not isinstance(result.get("rewritten_query"), str) or not result["rewritten_query"].strip():
             result["rewritten_query"] = query
             
         logger.info(f"Step 3: 提取结果解析成功 - 商品名: {result['item_names']}, 重写问题: {result['rewritten_query']}")
@@ -158,7 +285,13 @@ def step_4_vectorize_and_query(item_names: List[str], tenant_id: str = "local") 
 
 def step_5_align_item_names(query_results: List[Dict]) -> Dict:
     """
-    根据 Milvus 搜索评分，对齐商品名，生成「确认商品名」和「候选商品名」
+    综合型号词法关系、向量分数和Top1/Top2差距，对齐商品名。
+
+    规则优先级：
+    1. 用户输入的型号与候选型号token一致时直接确认；
+    2. 用户明确输入了型号，但所有候选型号都不同，则拒绝纯向量误匹配；
+    3. 没有明确型号时，只有Top1高分且明显领先Top2才自动确认；
+    4. 其余达到候选阈值的结果要求用户澄清。
     """
     logger.info("Step 5: 开始对齐商品名 (Score Analysis)")
     
@@ -180,54 +313,67 @@ def step_5_align_item_names(query_results: List[Dict]) -> Dict:
         top_matches_log = ", ".join([f"{m['item_name']}({m['score']:.3f})" for m in matches[:3]])
         logger.info(f"Step 5: '{extracted_name}' Top匹配: {top_matches_log}")
 
-        # 筛选
-        high = [m for m in matches if m.get("score", 0) > 0.85]
-        mid = [m for m in matches if m.get("score", 0) >= 0.6]
-
-        # 规则 A: 单个高置信度
-        if len(high) == 1:
-            confirmed_name = high[0].get("item_name")
-            confirmed_item_names.append(confirmed_name)
-            logger.info(f"Step 5: 规则A命中 (Single High) -> 确认: {confirmed_name}")
+        # 规则A：词法别名不依赖向量绝对分数。LJ2268与“LJ2268/LJ2268W激光打印机”
+        # 即使只有0.68分，也比没有共同型号token的0.95分候选更可信。
+        lexical_matches = [
+            match
+            for match in matches
+            if _is_lexical_alias(extracted_name, str(match.get("item_name") or ""))
+        ]
+        if lexical_matches:
+            confirmed_name = str(lexical_matches[0].get("item_name") or "").strip()
+            if confirmed_name:
+                confirmed_item_names.append(confirmed_name)
+                logger.info(f"Step 5: 规则A命中（型号/名称词法匹配）-> 确认: {confirmed_name}")
             continue
 
-        # 规则 B: 多个高置信度
-        if len(high) > 1:
-            picked = None
-            # 优先匹配同名
-            if extracted_name:
-                for m in high:
-                    if m.get("item_name") == extracted_name:
-                        picked = m
-                        logger.info(f"Step 5: 规则B命中 (Exact Match in High) -> 确认: {picked.get('item_name')}")
-                        break
-            
-            # 否则取最高分
-            if not picked:
-                picked = high[0]
-                logger.info(f"Step 5: 规则B命中 (Highest Score) -> 确认: {picked.get('item_name')}")
-
-            confirmed_item_names.append(picked.get("item_name"))
+        # 规则B：用户已经明确输入型号时，候选必须拥有相同型号token。
+        # 这条规则会拒绝已复现的错误：PT770被0.682分错误映射到LJ2268打印机。
+        if _extract_model_tokens(extracted_name):
+            logger.warning(f"Step 5: 规则B命中（明确型号不一致）-> 拒绝全部语义候选: {extracted_name}")
             continue
 
-        # 规则 C: 无高置信度，取中置信度候选
-        if len(mid) > 0:
-            current_options = [m.get("item_name") for m in mid[:5]]
+        # 规则C：对于没有型号代码的普通名称，自动确认阈值更严格，并要求第一名明显领先第二名。
+        top_score = float(matches[0].get("score") or 0)
+        second_score = float(matches[1].get("score") or 0) if len(matches) > 1 else 0.0
+        score_margin = top_score - second_score
+        if (
+            top_score >= rag_tuning_config.item_name_auto_confirm_score
+            and score_margin >= rag_tuning_config.item_name_auto_confirm_margin
+        ):
+            confirmed_name = str(matches[0].get("item_name") or "").strip()
+            if confirmed_name:
+                confirmed_item_names.append(confirmed_name)
+                logger.info(
+                    f"Step 5: 规则C命中（高分且领先）-> 确认: {confirmed_name}, "
+                    f"Top1={top_score:.3f}, Margin={score_margin:.3f}"
+                )
+            continue
+
+        # 规则D：达到候选阈值但不够自动确认的结果只用于澄清，不直接作为用户最终设备。
+        candidate_matches = [
+            match
+            for match in matches
+            if float(match.get("score") or 0) >= rag_tuning_config.item_name_candidate_score
+        ]
+        if candidate_matches:
+            current_options = [str(match.get("item_name") or "").strip() for match in candidate_matches[:5]]
+            current_options = [value for value in current_options if value]
             options.extend(current_options)
-            logger.info(f"Step 5: 规则C命中 (Mid Confidence) -> 添加候选: {current_options}")
+            logger.info(f"Step 5: 规则D命中（需要澄清）-> 添加候选: {current_options}")
             continue
-        
-        logger.info("Step 5: 规则D命中 (Low Confidence) -> 无匹配")
+
+        logger.info("Step 5: 规则E命中（低置信度）-> 无匹配")
 
     result = {
-        "confirmed_item_names": list(set(confirmed_item_names)),
-        "options": list(set(options))
+        "confirmed_item_names": _unique_strings(confirmed_item_names),
+        "options": _unique_strings(options)
     }
     logger.info(f"Step 5: 对齐结果: {result}")
     return result
 
 
-def step_6_check_confirmation(state: Dict, align_result: Dict, session_id: str, history: List[Dict], rewritten_query: str) -> Dict:
+def step_6_check_confirmation(state: Dict, align_result: Dict, rewritten_query: str) -> Dict:
     """
     检查对齐结果，更新 State
     """
@@ -243,20 +389,9 @@ def step_6_check_confirmation(state: Dict, align_result: Dict, session_id: str, 
     # 分支 A: 有确认商品名
     if confirmed:
         logger.info(f"Step 6: [分支A] 存在确认商品名: {confirmed}")
-        
-        # 更新历史消息中的 item_names
-        ids_to_update = []
-        for msg in history:
-            if not msg.get("item_names"):
-                mid = msg.get("_id")
-                if mid:
-                    ids_to_update.append(str(mid))
-        
-        if ids_to_update:
-            logger.info(f"Step 6: 更新 {len(ids_to_update)} 条历史消息的关联商品名")
-            update_message_item_names(ids_to_update, confirmed)
 
         state["item_names"] = confirmed
+        state["pending_item_names"] = []
         state["rewritten_query"] = rewritten_query
         if "answer" in state:
             del state["answer"]
@@ -269,33 +404,28 @@ def step_6_check_confirmation(state: Dict, align_result: Dict, session_id: str, 
         answer = f"您是想问以下哪个产品：{options_str}？请明确一下型号。"
         state["answer"] = answer
         state["item_names"] = []
+        # 候选写入本轮助手消息，下一轮用户只回复“是的”时才能安全恢复单个候选。
+        state["pending_item_names"] = options
+        state["rewritten_query"] = rewritten_query
         return state
 
     # 分支 C: 无结果
     logger.info("Step 6: [分支C] 无确认也无候选")
     state["answer"] = "抱歉，未找到相关产品，请提供准确型号以便我为您查询。"
     state["item_names"] = []
+    state["pending_item_names"] = []
+    state["rewritten_query"] = rewritten_query
     return state
 
 
-def step_7_write_history(state: Dict, session_id: str, history: List[Dict], rewritten_query: str, message_id: str) -> Dict:
+def step_7_write_history(state: Dict, session_id: str, rewritten_query: str, message_id: str) -> Dict:
     """
     写入最终历史记录
     """
     logger.info("Step 7: 写入会话历史")
     
-    # 如果有助手回答（分支 B/C），写入助手消息
-    if state.get("answer"):
-        logger.info("Step 7: 保存助手回答")
-        save_chat_message(
-            session_id=session_id,
-            role="assistant",
-            text=state["answer"],
-            rewritten_query="",
-            item_names=[]
-        )
-
-    # 更新用户消息（关联 rewrite_query 和 item_names）
+    # 这里只更新本轮用户消息。助手回答统一由node_answer_output写入一次，
+    # 否则澄清/未找到产品这两类回答会在MongoDB中重复保存两份。
     logger.info(f"Step 7: 更新用户消息 (ID: {message_id})")
     save_chat_message(
         session_id=session_id,
@@ -322,50 +452,68 @@ def node_item_name_confirm(state: QueryGraphState) -> QueryGraphState:
     # 标记任务开始
     add_running_task(session_id, "node_item_name_confirm", is_stream)
 
-    # 1. 获取历史记录
-    history = get_recent_messages(session_id, limit=10)
-    logger.info(f"Node: 获取到 {len(history)} 条历史消息")
+    try:
+        # 1. 获取最近历史。get_recent_messages已保证“先取最新N条，再按旧到新排列”。
+        history = get_recent_messages(session_id, limit=10)
+        logger.info(f"Node: 获取到 {len(history)} 条历史消息")
 
-    # 2. 保存用户当前消息 (初始保存，后续 step 7 会更新)
-    message_id = save_chat_message(session_id, "user", original_query, "", state.get("item_names", []))
-    logger.debug(f"Node: 用户消息已初始保存, ID: {message_id}")
+        # 2. 先保存用户原始消息，流程结束时只补充重写问题和最终设备名，不改变创建时间。
+        message_id = save_chat_message(session_id, "user", original_query, "", state.get("item_names", []))
+        logger.debug(f"Node: 用户消息已初始保存, ID: {message_id}")
 
-    # 3. 提取信息
-    extract_res = step_3_extract_info(original_query, history)
-    item_names = extract_res.get("item_names", [])
-    rewritten_query = extract_res.get("rewritten_query", original_query)
-    
-    # 更新 State 中的 rewrite_query
-    state["rewritten_query"] = rewritten_query
+        # 3. 信息提取分三层，确定性越强的规则优先级越高。
+        # 第一层：当前问题明确写了型号，直接采用当前型号，绝不允许历史设备覆盖。
+        explicit_item_names = _extract_explicit_item_names(original_query)
 
-    align_result = {}
+        # 第二层：当前问题只是“是的”，尝试确认上一轮保存的单个候选。
+        pending_item_name, previous_query = _resolve_pending_confirmation(original_query, history)
 
-    # 4. & 5. 如果有提取到商品名，进行搜索和对齐
-    if len(item_names) > 0:
-        query_results = step_4_vectorize_and_query(item_names, str(state.get("tenant_id") or "local"))
-        align_result = step_5_align_item_names(query_results)
-    else:
-        logger.info("Node: 未提取到商品名，跳过向量检索")
+        if explicit_item_names:
+            item_names = explicit_item_names
+            rewritten_query = original_query
+            logger.info(f"Node: 当前问题检测到明确型号，跳过LLM型号提取: {item_names}")
+        elif pending_item_name:
+            item_names = [pending_item_name]
+            rewritten_query = _rewrite_confirmed_question(pending_item_name, previous_query)
+            logger.info(f"Node: 用户确认上轮单个候选: {pending_item_name}")
+        else:
+            # 第三层：没有明确型号时，再让LLM结合历史处理中文名称、代词和省略问题。
+            extract_res = step_3_extract_info(original_query, history)
+            item_names = extract_res.get("item_names", [])
+            rewritten_query = extract_res.get("rewritten_query", original_query)
 
-    # 6. 检查确认状态
-    state = step_6_check_confirmation(state, align_result, session_id, history, rewritten_query)
+        state["rewritten_query"] = rewritten_query
+        align_result: Dict[str, List[str]] = {}
 
-    # 7. 写入最终历史
-    final_state = step_7_write_history(state, session_id, history, rewritten_query, message_id)
+        # 已确认的上轮候选来自真实Milvus结果，不需要再次用向量分数证明自己。
+        if pending_item_name:
+            align_result = {"confirmed_item_names": [pending_item_name], "options": []}
+        elif item_names:
+            query_results = step_4_vectorize_and_query(item_names, str(state.get("tenant_id") or "local"))
+            align_result = step_5_align_item_names(query_results)
+        else:
+            logger.info("Node: 未提取到商品名，跳过向量检索")
 
-    # 将 history 存入 state，供后续节点（如 node_answer_output）使用
-    final_state["history"] = [
-        {
-            "role": message.get("role", ""),
-            "text": message.get("text", ""),
-        }
-        for message in history
-    ]
-    # 标记任务完成
-    add_done_task(session_id, "node_item_name_confirm", is_stream)
-    
-    logger.info(f"Node: 处理结束, Final State Item Names: {final_state.get('item_names')}")
-    return final_state
+        # 4. 根据确认/候选/无结果三个分支更新状态。
+        state = step_6_check_confirmation(state, align_result, rewritten_query)
+
+        # 5. 仅更新本轮用户消息；助手消息统一由最终输出节点保存。
+        final_state = step_7_write_history(state, session_id, rewritten_query, message_id)
+
+        # 历史不包含本轮刚保存的用户消息，避免最终回答Prompt重复出现当前问题。
+        final_state["history"] = [
+            {
+                "role": message.get("role", ""),
+                "text": message.get("text", ""),
+            }
+            for message in history
+        ]
+
+        logger.info(f"Node: 处理结束, Final State Item Names: {final_state.get('item_names')}")
+        return final_state
+    finally:
+        # 即使节点抛出异常也移除“进行中”标记，真正的失败状态由query_service统一设置。
+        add_done_task(session_id, "node_item_name_confirm", is_stream)
 
 
 if __name__ == "__main__":
