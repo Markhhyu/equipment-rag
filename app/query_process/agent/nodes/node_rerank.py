@@ -1,3 +1,4 @@
+import hashlib
 import sys
 from typing import Any, Dict, List
 
@@ -25,6 +26,7 @@ LOCAL_METADATA_FIELDS = (
     "version_label",
     "trust_level",
     "device_model",
+    "equipment_version",
     "software_version",
     "firmware_version",
     "hardware_revision",
@@ -165,14 +167,48 @@ def _build_scored_document(item: Dict[str, Any], score: float) -> Dict[str, Any]
 def _version_profile(document: Dict[str, Any]) -> tuple[str, ...]:
     return tuple(
         str(document.get(field) or "").strip()
-        for field in ("device_model", "software_version", "firmware_version", "hardware_revision", "site_id")
+        for field in (
+            "device_model",
+            "equipment_version",
+            "software_version",
+            "firmware_version",
+            "hardware_revision",
+            "site_id",
+        )
     ) + ("、".join(sorted(str(value) for value in (document.get("asset_ids") or []) if str(value).strip())),)
 
 
-def _profile_label(profile: tuple[str, ...]) -> str:
-    labels = ("型号", "软件", "固件", "硬件", "厂区", "设备编号")
-    parts = [f"{label} {value}" for label, value in zip(labels, profile) if value]
+def _profile_scope_id(profile: tuple[str, ...]) -> str:
+    normalized = "\0".join(value.casefold() for value in profile)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:20]
+
+
+def _profile_label(profile: tuple[str, ...], varying_indexes: set[int] | None = None) -> str:
+    labels = ("型号", "设备版本", "软件", "固件", "硬件", "厂区", "设备编号")
+    parts = []
+    for index, (label, value) in enumerate(zip(labels, profile)):
+        if value:
+            parts.append(f"{label} {value}")
+        elif varying_indexes and index in varying_indexes:
+            parts.append(f"{label} 未指定")
     return " / ".join(parts) if parts else "通用版本（未限定设备配置）"
+
+
+def _profile_choice(profile: tuple[str, ...], varying_indexes: set[int]) -> Dict[str, Any]:
+    fields = (
+        "device_model",
+        "equipment_version",
+        "software_version",
+        "firmware_version",
+        "hardware_revision",
+        "site_id",
+        "asset_ids",
+    )
+    return {
+        "scope_id": _profile_scope_id(profile),
+        "label": _profile_label(profile, varying_indexes),
+        **{field: value for field, value in zip(fields, profile)},
+    }
 
 
 def resolve_version_scope(
@@ -199,18 +235,34 @@ def resolve_version_scope(
     for document_id, profiles in profiles_by_document.items():
         if len(profiles) <= 1:
             continue
-        matched = {
+        varying_indexes = {
+            index
+            for index in range(len(next(iter(profiles))))
+            if len({profile[index].casefold() for profile in profiles}) > 1
+        }
+        token_matches = {
             profile
             for profile in profiles
-            if any(value and "".join(value.casefold().split()) in normalized_question for value in profile)
+            if f"version_scope:{_profile_scope_id(profile)}" in normalized_question
+        }
+        matched = token_matches or {
+            profile
+            for profile in profiles
+            if any(
+                profile[index]
+                and "".join(profile[index].casefold().split()) in normalized_question
+                for index in varying_indexes
+            )
         }
         if len(matched) == 1:
             selected_profiles[document_id] = next(iter(matched))
             continue
+        choices = [_profile_choice(profile, varying_indexes) for profile in sorted(profiles)]
         ambiguous.append(
             {
                 "document_id": document_id,
-                "options": [_profile_label(profile) for profile in sorted(profiles)],
+                "options": [choice["label"] for choice in choices],
+                "choices": choices,
             }
         )
 

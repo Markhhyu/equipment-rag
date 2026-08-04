@@ -136,6 +136,7 @@ def create_collection(client, collection_name: str, vector_dimension: int):
     schema.add_field(field_name="version_label", datatype=DataType.VARCHAR, max_length=64)
     schema.add_field(field_name="trust_level", datatype=DataType.VARCHAR, max_length=32)
     schema.add_field(field_name="device_model", datatype=DataType.VARCHAR, max_length=128)
+    schema.add_field(field_name="equipment_version", datatype=DataType.VARCHAR, max_length=128)
     schema.add_field(field_name="software_version", datatype=DataType.VARCHAR, max_length=128)
     schema.add_field(field_name="firmware_version", datatype=DataType.VARCHAR, max_length=128)
     schema.add_field(field_name="hardware_revision", datatype=DataType.VARCHAR, max_length=128)

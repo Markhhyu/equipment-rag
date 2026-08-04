@@ -342,6 +342,7 @@ def node_md_img(state: ImportGraphState) -> ImportGraphState:
                 "version_label": version_label,
                 "trust_level": str(state.get("trust_level") or "manufacturer_manual"),
                 "device_model": str(state.get("device_model") or ""),
+                "equipment_version": str(state.get("equipment_version") or ""),
                 "software_version": str(state.get("software_version") or ""),
                 "firmware_version": str(state.get("firmware_version") or ""),
                 "hardware_revision": str(state.get("hardware_revision") or ""),

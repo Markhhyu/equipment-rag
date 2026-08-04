@@ -33,6 +33,24 @@ import {
 type Role = 'user' | 'assistant'
 type MessageStatus = 'ready' | 'streaming' | 'error'
 
+interface VersionChoice {
+  scope_id: string
+  label: string
+  device_model?: string
+  equipment_version?: string
+  software_version?: string
+  firmware_version?: string
+  hardware_revision?: string
+  site_id?: string
+  asset_ids?: string
+}
+
+interface VersionScopeGroup {
+  document_id: string
+  options: string[]
+  choices: VersionChoice[]
+}
+
 interface ChatMessage {
   id: string
   role: Role
@@ -47,6 +65,7 @@ interface ChatMessage {
   sources?: AnswerSource[]
   requiresHumanReview?: boolean
   reviewReason?: string
+  versionScopeOptions?: VersionScopeGroup[]
 }
 
 interface AnswerSource {
@@ -64,6 +83,7 @@ interface AnswerSource {
   snippet: string
   score?: number | null
   device_model: string
+  equipment_version: string
   software_version: string
   firmware_version: string
   hardware_revision: string
@@ -101,6 +121,7 @@ interface HistoryResponse {
     sources?: AnswerSource[]
     requires_human_review?: boolean
     review_reason?: string
+    version_scope_options?: VersionScopeGroup[]
     ts?: number | string
   }>
 }
@@ -179,6 +200,7 @@ async function loadHistory(): Promise<void> {
       sources: item.sources ?? [],
       requiresHumanReview: item.requires_human_review ?? false,
       reviewReason: item.review_reason ?? '',
+      versionScopeOptions: item.version_scope_options ?? [],
       time: item.ts,
       status: 'ready',
     }))
@@ -261,6 +283,7 @@ function applySseMessage(message: SseMessage, assistant: ChatMessage): void {
     assistant.sources = (data.sources as AnswerSource[] | undefined) ?? []
     assistant.requiresHumanReview = Boolean(data.requires_human_review)
     assistant.reviewReason = String(data.review_reason ?? '')
+    assistant.versionScopeOptions = (data.version_scope_options as VersionScopeGroup[] | undefined) ?? []
     assistant.status = 'ready'
   } else if (message.event === 'error') {
     assistant.status = 'error'
@@ -269,7 +292,7 @@ function applySseMessage(message: SseMessage, assistant: ChatMessage): void {
   void scrollToBottom()
 }
 
-async function sendMessage(): Promise<void> {
+async function sendMessage(versionChoice?: VersionChoice): Promise<void> {
   if (!canSend.value) return
   const text = question.value.trim()
   const selectedImages = [...pendingImages.value]
@@ -294,7 +317,13 @@ async function sendMessage(): Promise<void> {
     }
     const response = await apiFetch('/query', apiKey.value, {
       method: 'POST',
-      body: JSON.stringify({ query: text, session_id: sessionId.value, is_stream: true, image_refs: imageRefs }),
+      body: JSON.stringify({
+        query: text,
+        session_id: sessionId.value,
+        is_stream: true,
+        image_refs: imageRefs,
+        version_scope_id: versionChoice?.scope_id ?? '',
+      }),
     }, true)
     const submitted = await response.json() as { trace_id?: string }
     assistant.traceId = submitted.trace_id
@@ -319,6 +348,13 @@ async function sendMessage(): Promise<void> {
     for (const image of selectedImages) URL.revokeObjectURL(image.previewUrl)
     await scrollToBottom()
   }
+}
+
+async function selectVersion(choice: VersionChoice): Promise<void> {
+  if (sending.value) return
+  question.value = `使用版本：${choice.label}`
+  await nextTick()
+  await sendMessage(choice)
 }
 
 async function submitFeedback(message: ChatMessage, value: 0 | 1): Promise<void> {
@@ -471,6 +507,15 @@ onBeforeUnmount(() => {
                 <div><strong>需要人工复核</strong><span>{{ message.reviewReason }}</span></div>
               </div>
 
+              <div v-if="message.role === 'assistant' && message.versionScopeOptions?.length" class="version-choice-panel">
+                <strong>选择设备适用版本</strong>
+                <div v-for="group in message.versionScopeOptions" :key="group.document_id" class="version-choice-list">
+                  <button v-for="choice in group.choices" :key="choice.scope_id" :disabled="sending" @click="selectVersion(choice)">
+                    {{ choice.label }}
+                  </button>
+                </div>
+              </div>
+
               <details v-if="message.role === 'assistant' && ((message.doneList?.length ?? 0) + (message.runningList?.length ?? 0) > 0)" class="progress-panel">
                 <summary>
                   <span><el-icon><Check /></el-icon>{{ message.doneList?.length ?? 0 }} 项已完成</span>
@@ -498,8 +543,9 @@ onBeforeUnmount(() => {
                     <a v-if="source.url" :href="source.url" target="_blank" rel="noreferrer">{{ source.title }}</a>
                     <strong v-else>{{ source.title }}</strong>
                     <p v-if="source.section">{{ source.section }}<template v-if="source.part !== null && source.part !== undefined"> · 片段 {{ source.part }}</template></p>
-                    <div class="source-scope" v-if="source.device_model || source.software_version || source.firmware_version || source.hardware_revision || source.site_id">
+                    <div class="source-scope" v-if="source.device_model || source.equipment_version || source.software_version || source.firmware_version || source.hardware_revision || source.site_id">
                       <span v-if="source.device_model">型号 {{ source.device_model }}</span>
+                      <span v-if="source.equipment_version">设备版本 {{ source.equipment_version }}</span>
                       <span v-if="source.software_version">软件 {{ source.software_version }}</span>
                       <span v-if="source.firmware_version">固件 {{ source.firmware_version }}</span>
                       <span v-if="source.hardware_revision">硬件 {{ source.hardware_revision }}</span>
@@ -553,7 +599,7 @@ onBeforeUnmount(() => {
               </button>
               <span>图片仅本会话可见 · {{ attachmentHint }}</span>
             </div>
-            <button class="send-button" :disabled="!canSend" @click="sendMessage">
+            <button class="send-button" :disabled="!canSend" @click="sendMessage()">
               <el-icon v-if="sending" class="is-loading"><Loading /></el-icon>
               <el-icon v-else><Promotion /></el-icon>
             </button>

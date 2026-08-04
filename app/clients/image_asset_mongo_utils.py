@@ -256,6 +256,7 @@ class ImageAssetMongoTool:
             "revision_id": 1,
             "version_label": 1,
             "device_model": 1,
+            "equipment_version": 1,
             "software_version": 1,
             "firmware_version": 1,
             "hardware_revision": 1,

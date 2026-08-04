@@ -74,6 +74,7 @@ class QueryRequest(BaseModel):
     session_id: str = Field(None, description="会话ID")
     is_stream: bool = Field(False, description="是否流式返回")
     image_refs: list[str] = Field(default_factory=list, description="当前租户和会话已上传的图片对象引用")
+    version_scope_id: str = Field(default="", max_length=64, description="用户从上一轮澄清中选择的版本范围")
 
 
 class FeedbackRequest(BaseModel):
@@ -154,6 +155,7 @@ def run_query_graph(
     resume: bool = False,
     tenant_id: str = "local",
     user_image_refs: Optional[list[str]] = None,
+    version_scope_id: str = "",
 ):
     """执行一次完整问答流程。"""
     run_started = time.perf_counter()
@@ -170,6 +172,7 @@ def run_query_graph(
         "user_query": user_query,
         "is_stream": is_stream,
         "image_refs": user_image_refs or [],
+        "version_scope_id": version_scope_id,
     }
     run_store.create(
         trace_id,
@@ -188,6 +191,7 @@ def run_query_graph(
         "trace_id": trace_id,
         "is_stream": is_stream,
         "user_image_refs": user_image_refs or [],
+        "selected_version_scope_id": version_scope_id,
     }
 
     try:
@@ -259,6 +263,7 @@ def run_query_graph(
                 "answer_policy": final_state.get("answer_policy") or "answer",
                 "requires_human_review": bool(final_state.get("requires_human_review")),
                 "review_reason": final_state.get("review_reason") or "",
+                "version_scope_options": final_state.get("version_scope_options") or [],
                 "clarified": quality_report["response"]["clarified"],
                 "visual": visual_summary,
             },
@@ -282,6 +287,7 @@ def run_query_graph(
                     "answer_policy": final_state.get("answer_policy") or "answer",
                     "requires_human_review": bool(final_state.get("requires_human_review")),
                     "review_reason": final_state.get("review_reason") or "",
+                    "version_scope_options": final_state.get("version_scope_options") or [],
                     "trace_id": trace_id,
                     "need_visual_reasoning": bool(final_state.get("need_visual_reasoning")),
                     "image_reasoning_status": final_state.get("image_reasoning_status") or "not_required",
@@ -362,6 +368,7 @@ async def query(
             "user_query": user_query,
             "is_stream": request.is_stream,
             "image_refs": user_image_refs,
+            "version_scope_id": request.version_scope_id,
         },
         max_attempts=runtime_config.max_attempts,
         tenant_id=principal.tenant_id,
@@ -385,6 +392,7 @@ async def query(
             False,
             principal.tenant_id,
             user_image_refs,
+            request.version_scope_id,
         )
         return {
             "message": "结果正在处理中...",
@@ -400,6 +408,7 @@ async def query(
         False,
         principal.tenant_id,
         user_image_refs,
+        request.version_scope_id,
     )
     run_record = run_store.get_for_tenant(trace_id, principal.tenant_id)
     if final_state is None or run_record is None or run_record.status == RunStatus.FAILED:
@@ -417,6 +426,7 @@ async def query(
         "answer_policy": run_record.result.get("answer_policy", "answer"),
         "requires_human_review": run_record.result.get("requires_human_review", False),
         "review_reason": run_record.result.get("review_reason", ""),
+        "version_scope_options": run_record.result.get("version_scope_options", []),
         "clarified": run_record.result.get("clarified", False),
         "visual": run_record.result.get("visual", {}),
         "image_urls": final_state.get("image_urls") or [],
@@ -468,6 +478,7 @@ async def retry_run(
         True,
         principal.tenant_id,
         list(run.input.get("image_refs") or []),
+        str(run.input.get("version_scope_id") or ""),
     )
     return pending.to_public_dict()
 
@@ -562,6 +573,7 @@ async def history(
                     "sources": record.get("sources", []),
                     "requires_human_review": bool(record.get("requires_human_review")),
                     "review_reason": record.get("review_reason", ""),
+                    "version_scope_options": record.get("version_scope_options", []),
                     "trace_id": record.get("trace_id", ""),
                     "feedback_value": record.get("feedback_value"),
                     "feedback_comment": record.get("feedback_comment", ""),

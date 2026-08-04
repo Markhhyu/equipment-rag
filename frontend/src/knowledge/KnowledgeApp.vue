@@ -54,6 +54,7 @@ interface KnowledgeVersion {
   created_at: string
   published_at?: string
   device_model: string
+  equipment_version: string
   software_version: string
   firmware_version: string
   hardware_revision: string
@@ -88,7 +89,7 @@ const registeringLegacy = ref(false)
 const uploadFile = ref<File | null>(null)
 const emptyUploadForm = () => ({
   documentId: '', title: '', versionLabel: '', deviceModel: '', softwareVersion: '',
-  firmwareVersion: '', hardwareRevision: '', siteId: '', assetIds: '', trustLevel: 'manufacturer_manual', publishAfterImport: false,
+  equipmentVersion: '', firmwareVersion: '', hardwareRevision: '', siteId: '', assetIds: '', trustLevel: 'manufacturer_manual', publishAfterImport: false,
 })
 const uploadForm = ref(emptyUploadForm())
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -159,18 +160,19 @@ function openNewDocument(): void {
   uploadVisible.value = true
 }
 
-function openNewVersion(document: KnowledgeDocument): void {
+function openNewVersion(document: KnowledgeDocument, baseVersion?: KnowledgeVersion): void {
   uploadForm.value = {
     documentId: document.document_id,
     title: document.title,
     versionLabel: '',
-    deviceModel: '',
-    softwareVersion: '',
-    firmwareVersion: '',
-    hardwareRevision: '',
-    siteId: '',
-    assetIds: '',
-    trustLevel: 'manufacturer_manual',
+    deviceModel: baseVersion?.device_model ?? '',
+    equipmentVersion: baseVersion?.equipment_version ?? '',
+    softwareVersion: baseVersion?.software_version ?? '',
+    firmwareVersion: baseVersion?.firmware_version ?? '',
+    hardwareRevision: baseVersion?.hardware_revision ?? '',
+    siteId: baseVersion?.site_id ?? '',
+    assetIds: baseVersion?.asset_ids?.join('，') ?? '',
+    trustLevel: baseVersion?.trust_level ?? 'manufacturer_manual',
     publishAfterImport: false,
   }
   uploadFile.value = null
@@ -201,6 +203,7 @@ async function submitUpload(): Promise<void> {
   form.append('title', uploadForm.value.title.trim())
   form.append('version_label', uploadForm.value.versionLabel.trim())
   form.append('device_model', uploadForm.value.deviceModel.trim())
+  form.append('equipment_version', uploadForm.value.equipmentVersion.trim())
   form.append('software_version', uploadForm.value.softwareVersion.trim())
   form.append('firmware_version', uploadForm.value.firmwareVersion.trim())
   form.append('hardware_revision', uploadForm.value.hardwareRevision.trim())
@@ -391,7 +394,7 @@ onMounted(loadDocuments)
                 <td><code>{{ document.active_revision_ids?.length ? `${document.active_revision_ids.length} 个适用版本` : document.active_revision_id ? '1 个适用版本' : '未发布' }}</code></td>
                 <td><span class="status-pill" :class="document.status">{{ statusLabels[document.status] }}</span></td>
                 <td>{{ document.version_count }}</td><td>{{ formatDate(document.updated_at) }}</td>
-                <td><div class="row-actions"><button @click="openDetail(document)">版本</button><button @click="openNewVersion(document)">新版本</button><button :class="{ danger: document.status !== 'disabled' }" @click="toggleDocument(document)">{{ document.status === 'disabled' ? '启用' : '停用' }}</button></div></td>
+                <td><div class="row-actions"><button @click="openDetail(document)">版本</button><button @click="openNewVersion(document)">新适用版本</button><button :class="{ danger: document.status !== 'disabled' }" @click="toggleDocument(document)">{{ document.status === 'disabled' ? '启用' : '停用' }}</button></div></td>
               </tr>
             </tbody>
           </table>
@@ -411,17 +414,19 @@ onMounted(loadDocuments)
               <p>{{ version.filename }} · {{ formatBytes(version.file_size || 0) }}</p>
               <div class="item-tags">
                 <span v-if="version.device_model">型号 {{ version.device_model }}</span>
+                <span v-if="version.equipment_version">设备版本 {{ version.equipment_version }}</span>
                 <span v-if="version.software_version">软件 {{ version.software_version }}</span>
                 <span v-if="version.firmware_version">固件 {{ version.firmware_version }}</span>
                 <span v-if="version.hardware_revision">硬件 {{ version.hardware_revision }}</span>
                 <span v-if="version.site_id">厂区 {{ version.site_id }}</span>
-                <i v-if="!version.device_model && !version.software_version && !version.firmware_version && !version.hardware_revision && !version.site_id">通用适用范围</i>
+                <i v-if="!version.device_model && !version.equipment_version && !version.software_version && !version.firmware_version && !version.hardware_revision && !version.site_id">通用适用范围</i>
               </div>
               <div class="version-metrics"><span>可信等级 <b>{{ trustLabels[version.trust_level] ?? '厂商手册' }}</b></span><span>切片 <b>{{ version.chunk_count }}</b></span><span>图片 <b>{{ version.image_count }}</b></span><span>Revision <code>{{ version.revision_id.slice(0, 12) }}</code></span></div>
               <p v-if="version.error" class="version-error">{{ version.error }}</p>
               <div class="version-actions">
                 <button v-if="version.import_status === 'completed' && version.status === 'draft'" class="publish" @click="publishVersion(version)"><el-icon><Check /></el-icon>发布</button>
                 <button v-if="version.import_status === 'completed' && version.status === 'archived'" @click="rollbackVersion(version)"><el-icon><Refresh /></el-icon>回滚到此版本</button>
+                <button v-if="version.import_status === 'completed'" @click="openNewVersion(selected, version)"><el-icon><DocumentAdd /></el-icon>基于此范围导入</button>
                 <span v-if="version.status === 'active'"><el-icon><Check /></el-icon>当前生效版本</span>
                 <span v-if="version.status === 'importing'"><el-icon class="is-loading"><Loading /></el-icon>正在导入</span>
               </div>
@@ -437,6 +442,7 @@ onMounted(loadDocuments)
         <label>业务版本<input v-model="uploadForm.versionLabel" placeholder="例如：V2.1、2026版；留空自动生成" /></label>
         <label>来源可信等级<select v-model="uploadForm.trustLevel" class="trust-select"><option value="enterprise_sop">企业批准 SOP</option><option value="manufacturer_manual">厂商手册</option><option value="internal_reference">内部参考</option></select></label>
         <label>设备型号<input v-model="uploadForm.deviceModel" placeholder="例如：LJ2268" /></label>
+        <label>设备版本 / 代次<input v-model="uploadForm.equipmentVersion" placeholder="例如：A版、第二代、2025款" /></label>
         <label>软件版本<input v-model="uploadForm.softwareVersion" placeholder="例如：Control Suite 3.2" /></label>
         <label>固件版本<input v-model="uploadForm.firmwareVersion" placeholder="例如：FW 1.8.4" /></label>
         <label>硬件修订版<input v-model="uploadForm.hardwareRevision" placeholder="例如：Rev C" /></label>

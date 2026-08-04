@@ -54,6 +54,7 @@ def _clean_text(value: str | None, limit: int) -> str:
 
 APPLICABILITY_FIELDS = (
     "device_model",
+    "equipment_version",
     "software_version",
     "firmware_version",
     "hardware_revision",
@@ -71,8 +72,13 @@ def build_applicability_profile(values: dict[str, Any]) -> dict[str, Any]:
             if _clean_text(value, 128)
         )
     )[:500]
+    # equipment_version is a newly added dimension. When it is empty, keep the legacy
+    # field sequence so a replacement import still targets the same persisted scope hash.
+    scope_fields = APPLICABILITY_FIELDS if profile["equipment_version"] else tuple(
+        field for field in APPLICABILITY_FIELDS if field != "equipment_version"
+    )
     normalized = "\0".join(
-        [profile[field].casefold() for field in APPLICABILITY_FIELDS]
+        [profile[field].casefold() for field in scope_fields]
         + [value.casefold() for value in sorted(asset_ids, key=str.casefold)]
     )
     # 全部留空表示通用版本，兼容旧知识库的单版本语义。
@@ -206,6 +212,7 @@ class DocumentRegistry(ABC):
         file_size: int = 0,
         publish_requested: bool = False,
         device_model: str = "",
+        equipment_version: str = "",
         software_version: str = "",
         firmware_version: str = "",
         hardware_revision: str = "",

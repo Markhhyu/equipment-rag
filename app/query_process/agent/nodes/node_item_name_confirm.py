@@ -145,6 +145,74 @@ def _rewrite_confirmed_question(item_name: str, previous_query: str) -> str:
     return f"关于{item_name}的使用和维护问题"
 
 
+def _normalize_version_selection(value: str) -> str:
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", str(value or "").casefold())
+
+
+def _resolve_pending_version_selection(
+    query: str,
+    history: List[Dict],
+    selected_scope_id: str = "",
+) -> Tuple[Optional[Dict[str, Any]], str, List[str]]:
+    """Match a user's version choice against the latest structured clarification message."""
+    normalized_query = _normalize_version_selection(query)
+    requested_scope_id = str(selected_scope_id or "").strip().casefold()
+    if not normalized_query and not requested_scope_id:
+        return None, "", []
+
+    for message in reversed(history or []):
+        if message.get("role") != "assistant":
+            continue
+        groups = message.get("version_scope_options") or []
+        if not groups:
+            return None, "", []
+
+        choices = [
+            choice
+            for group in groups
+            if isinstance(group, dict)
+            for choice in (group.get("choices") or [])
+            if isinstance(choice, dict) and choice.get("scope_id")
+        ]
+        matches = []
+        for choice in choices:
+            scope_id = str(choice.get("scope_id") or "").casefold()
+            label = _normalize_version_selection(str(choice.get("label") or ""))
+            values = {
+                _normalize_version_selection(str(choice.get(field) or ""))
+                for field in (
+                    "equipment_version",
+                    "software_version",
+                    "firmware_version",
+                    "hardware_revision",
+                    "site_id",
+                    "asset_ids",
+                )
+                if choice.get(field)
+            }
+            if requested_scope_id == scope_id or scope_id in str(query or "").casefold() or label in normalized_query or any(
+                value and value in normalized_query for value in values
+            ):
+                matches.append(choice)
+
+        unique_matches = {str(choice["scope_id"]): choice for choice in matches}
+        if len(unique_matches) != 1:
+            return None, "", []
+        selected = next(iter(unique_matches.values()))
+        previous_query = str(message.get("version_scope_question") or "").strip()
+        item_names = _unique_strings(message.get("item_names") or [])
+        return selected, previous_query, item_names
+
+    return None, "", []
+
+
+def _rewrite_version_question(choice: Dict[str, Any], previous_query: str) -> str:
+    scope_id = str(choice.get("scope_id") or "").strip()
+    label = str(choice.get("label") or "已选择版本").strip()
+    base = previous_query or "请说明该设备的使用和维护要求"
+    return f"{base}；已确认适用范围：{label} [version_scope:{scope_id}]"
+
+
 def step_3_extract_info(query: str, history: List[Dict]) -> Dict:
     """
     利用LLM从当前问题以及历史会话中提取出主要询问的商品名称item_names（可多个，JSON列表形式）
@@ -470,13 +538,26 @@ def node_item_name_confirm(state: QueryGraphState) -> QueryGraphState:
         logger.debug(f"Node: 用户消息已初始保存, ID: {message_id}")
 
         # 3. 信息提取分三层，确定性越强的规则优先级越高。
+        selected_version, previous_version_query, version_item_names = _resolve_pending_version_selection(
+            original_query,
+            history,
+            str(state.get("selected_version_scope_id") or ""),
+        )
+
         # 第一层：当前问题明确写了型号，直接采用当前型号，绝不允许历史设备覆盖。
         explicit_item_names = _extract_explicit_item_names(original_query)
 
         # 第二层：当前问题只是“是的”，尝试确认上一轮保存的单个候选。
         pending_item_name, previous_query = _resolve_pending_confirmation(original_query, history)
 
-        if explicit_item_names:
+        if selected_version and version_item_names:
+            item_names = version_item_names
+            rewritten_query = _rewrite_version_question(selected_version, previous_version_query)
+            logger.info(
+                f"Node: 用户确认上轮适用版本: {selected_version.get('label')}，"
+                f"scope_id={selected_version.get('scope_id')}"
+            )
+        elif explicit_item_names:
             item_names = explicit_item_names
             rewritten_query = original_query
             logger.info(f"Node: 当前问题检测到明确型号，跳过LLM型号提取: {item_names}")
@@ -494,7 +575,9 @@ def node_item_name_confirm(state: QueryGraphState) -> QueryGraphState:
         align_result: Dict[str, List[str]] = {}
 
         # 已确认的上轮候选来自真实Milvus结果，不需要再次用向量分数证明自己。
-        if pending_item_name:
+        if selected_version and version_item_names:
+            align_result = {"confirmed_item_names": version_item_names, "options": []}
+        elif pending_item_name:
             align_result = {"confirmed_item_names": [pending_item_name], "options": []}
         elif item_names:
             query_results = step_4_vectorize_and_query(item_names, str(state.get("tenant_id") or "local"))

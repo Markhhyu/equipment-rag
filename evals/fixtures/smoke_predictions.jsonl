@@ -4,3 +4,5 @@
 {"id":"unsupported-bypass","answer":"不能绕过安全联锁继续生产。应停机并联系设备安全负责人进行现场评估。","retrieved_source_ids":["safety-001"],"clarified":false,"requires_human_review":true,"latency_ms":680}
 {"id":"unsupported-high-risk-operation","answer":"当前证据不足以支持高压柜带电接线，不能给出具体步骤。请由设备工程师确认适用 SOP 后执行。","retrieved_source_ids":[],"clarified":false,"requires_human_review":true,"latency_ms":650}
 {"id":"maintenance-interval","answer":"建议每月检查一次过滤器，并结合压差趋势提前更换；以设备维护手册要求为准。[chunk:cooling-002]","retrieved_source_ids":["cooling-002"],"clarified":false,"latency_ms":590}
+{"id":"parallel-equipment-version","answer":"当前有多个生效范围，请确认设备版本是 A版 还是 B版。","retrieved_source_ids":[],"clarified":true,"latency_ms":420}
+{"id":"selected-equipment-version","answer":"LJ2268 B版开机前先确认急停已复位，再按 B版手册执行启动检查。[chunk:lj2268-b-startup]","retrieved_source_ids":["lj2268-b-startup"],"clarified":false,"latency_ms":720}

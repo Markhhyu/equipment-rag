@@ -119,6 +119,7 @@ def _format_reranked_context(reranked_docs: List[Dict[str, Any]]) -> str:
             f"{label}={document.get(field)}"
             for field, label in (
                 ("device_model", "device_model"),
+                ("equipment_version", "equipment_version"),
                 ("software_version", "software"),
                 ("firmware_version", "firmware"),
                 ("hardware_revision", "hardware"),
@@ -363,6 +364,7 @@ def build_answer_sources(reranked_docs: List[Dict[str, Any]]) -> List[Dict[str, 
                     if isinstance(value, int) or str(value).isdigit()
                 ],
                 "device_model": str(document.get("device_model") or ""),
+                "equipment_version": str(document.get("equipment_version") or ""),
                 "software_version": str(document.get("software_version") or ""),
                 "firmware_version": str(document.get("firmware_version") or ""),
                 "hardware_revision": str(document.get("hardware_revision") or ""),
@@ -404,6 +406,8 @@ def step_4_write_history(
             sources=sources or state.get("sources") or [],
             requires_human_review=bool(state.get("requires_human_review")),
             review_reason=str(state.get("review_reason") or ""),
+            version_scope_options=state.get("version_scope_options") or [],
+            version_scope_question=str(state.get("rewritten_query") or state.get("original_query") or ""),
         )
     except Exception as exc:
         logger.error(f"写入MongoDB历史记录失败：{exc}", exc_info=True)

@@ -92,6 +92,42 @@ def test_affirmative_reply_does_not_guess_among_multiple_candidates():
     assert node_item_name_confirm._resolve_pending_confirmation("是的", history) == (None, "")
 
 
+def test_version_choice_recovers_original_question_and_confirmed_device():
+    choice_a = {"scope_id": "scope-a", "label": "型号 LJ2268 / 设备版本 A版", "equipment_version": "A版"}
+    choice_b = {"scope_id": "scope-b", "label": "型号 LJ2268 / 设备版本 B版", "equipment_version": "B版"}
+    history = [
+        {
+            "role": "assistant",
+            "text": "请选择设备版本。",
+            "item_names": ["LJ2268打印机"],
+            "version_scope_question": "LJ2268怎么开机？",
+            "version_scope_options": [
+                {"document_id": "manual-a", "choices": [choice_a, choice_b], "options": []},
+            ],
+        }
+    ]
+
+    selected, previous_query, item_names = node_item_name_confirm._resolve_pending_version_selection(
+        "使用版本：型号 LJ2268 / 设备版本 B版",
+        history,
+    )
+
+    assert selected == choice_b
+    assert previous_query == "LJ2268怎么开机？"
+    assert item_names == ["LJ2268打印机"]
+    assert "[version_scope:scope-b]" in node_item_name_confirm._rewrite_version_question(
+        selected,
+        previous_query,
+    )
+
+    selected_by_id, _, _ = node_item_name_confirm._resolve_pending_version_selection(
+        "使用所选版本",
+        history,
+        "scope-b",
+    )
+    assert selected_by_id == choice_b
+
+
 def test_node_prefers_explicit_model_over_llm_history(monkeypatch):
     """当前问题含LJ2268时，型号提取LLM不应被调用，也就无法注入历史中的PT770。"""
     saved_messages = []
@@ -166,11 +202,17 @@ def test_answer_history_saves_pending_candidates(monkeypatch):
             "item_names": [],
             "pending_item_names": ["设备A"],
             "trace_id": "trace",
+            "rewritten_query": "设备怎么开机？",
+            "version_scope_options": [
+                {"document_id": "manual-a", "options": ["设备版本 A版"], "choices": []},
+            ],
         },
         [],
     )
 
     assert calls[0]["item_names"] == ["设备A"]
+    assert calls[0]["version_scope_question"] == "设备怎么开机？"
+    assert calls[0]["version_scope_options"][0]["document_id"] == "manual-a"
 
 
 def test_answer_node_no_longer_sends_final_before_node_completion(monkeypatch):

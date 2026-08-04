@@ -30,6 +30,7 @@ QUERY_OUTPUT_FIELDS = [
     "version_label",
     "trust_level",
     "device_model",
+    "equipment_version",
     "software_version",
     "firmware_version",
     "hardware_revision",

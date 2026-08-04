@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 from app.clients.document_registry_utils import (
     InMemoryDocumentRegistry,
+    build_applicability_profile,
     filter_queryable_hits,
     legacy_document_identity,
     reset_document_registry_for_tests,
@@ -135,6 +137,35 @@ def test_different_software_versions_can_be_active_together(registry: InMemoryDo
     }
 
 
+def test_different_equipment_versions_can_be_active_together(registry: InMemoryDocumentRegistry):
+    _completed_version(registry, "rev-a", device_model="LJ2268", equipment_version="A版")
+    registry.publish_version("local", "manual-a", "rev-a", actor="tester")
+    _completed_version(registry, "rev-b", device_model="LJ2268", equipment_version="B版")
+    registry.publish_version("local", "manual-a", "rev-b", actor="tester")
+
+    document = registry.get_document("local", "manual-a")
+
+    assert document is not None
+    assert set(document["active_revision_ids"]) == {"rev-a", "rev-b"}
+
+
+def test_empty_equipment_version_keeps_legacy_applicability_hash():
+    values = {
+        "device_model": "LJ2268",
+        "software_version": "4.0",
+        "firmware_version": "FW1",
+        "hardware_revision": "RevC",
+        "site_id": "SZ-01",
+        "asset_ids": ["A-100"],
+    }
+    legacy_normalized = "\0".join(
+        ["lj2268", "4.0", "fw1", "revc", "sz-01", "a-100"]
+    )
+    expected = f"scope-{hashlib.sha256(legacy_normalized.encode('utf-8')).hexdigest()[:24]}"
+
+    assert build_applicability_profile(values)["applicability_key"] == expected
+
+
 def test_publish_backfills_scope_mapping_without_dropping_other_active_versions(
     registry: InMemoryDocumentRegistry,
 ):
@@ -243,6 +274,7 @@ def test_build_answer_sources_keeps_version_section_and_snippet():
             "part": 3,
             "page_numbers": [12, 13],
             "device_model": "LJ2268",
+            "equipment_version": "",
             "software_version": "4.0",
             "firmware_version": "FW 1.8",
             "hardware_revision": "",
@@ -276,6 +308,43 @@ def test_query_does_not_mix_parallel_software_versions_without_user_selection():
     filtered, options = resolve_version_scope("LJ2268 软件 4.0 怎么使用", documents)
     assert [document["text"] for document in filtered] == ["新版步骤"]
     assert options == []
+
+
+def test_common_model_does_not_hide_explicit_equipment_version_selection():
+    documents = [
+        {
+            "source": "local",
+            "document_id": "manual-a",
+            "device_model": "LJ2268",
+            "equipment_version": "A版",
+            "text": "A版步骤",
+        },
+        {
+            "source": "local",
+            "document_id": "manual-a",
+            "device_model": "LJ2268",
+            "equipment_version": "B版",
+            "text": "B版步骤",
+        },
+    ]
+
+    filtered, options = resolve_version_scope("LJ2268 B版怎么开机", documents)
+
+    assert [document["text"] for document in filtered] == ["B版步骤"]
+    assert options == []
+
+
+def test_version_ambiguity_returns_stable_structured_choices():
+    documents = [
+        {"source": "local", "document_id": "manual-a", "device_model": "LJ2268", "equipment_version": "A版", "text": "A"},
+        {"source": "local", "document_id": "manual-a", "device_model": "LJ2268", "equipment_version": "B版", "text": "B"},
+    ]
+
+    filtered, options = resolve_version_scope("LJ2268怎么开机", documents)
+
+    assert filtered == []
+    assert [choice["equipment_version"] for choice in options[0]["choices"]] == ["A版", "B版"]
+    assert all(len(choice["scope_id"]) == 20 for choice in options[0]["choices"])
 
 
 def test_rerank_excludes_unverified_web_when_authoritative_evidence_exists():

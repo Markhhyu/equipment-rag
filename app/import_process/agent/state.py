@@ -16,6 +16,7 @@ class ImportGraphState(TypedDict):
     version_label: str  # 人工可读业务版本，例如V2.1或2026版
     trust_level: str  # enterprise_sop/manufacturer_manual/internal_reference
     device_model: str  # 适用设备型号，例如LJ2268
+    equipment_version: str  # 同型号设备的版本或代次，例如A版、第二代
     software_version: str  # 适用上位机/设备软件版本
     firmware_version: str  # 适用固件版本
     hardware_revision: str  # 适用硬件修订版
@@ -69,6 +70,7 @@ graph_default_state: ImportGraphState = {
     "version_label": "legacy-v1",
     "trust_level": "manufacturer_manual",
     "device_model": "",
+    "equipment_version": "",
     "software_version": "",
     "firmware_version": "",
     "hardware_revision": "",

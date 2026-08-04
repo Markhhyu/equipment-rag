@@ -68,6 +68,12 @@
 .review-alert > .el-icon { margin-top: 1px; flex: 0 0 auto; font-size: 15px; }
 .review-alert strong, .review-alert span { display: block; }
 .review-alert strong { font-size: 11px; }.review-alert span { margin-top: 3px; font-size: 10px; line-height: 1.5; }
+.version-choice-panel { width: 100%; margin-top: 8px; padding: 11px; border: 1px solid #cfd8ef; border-radius: 9px; background: #f8faff; }
+.version-choice-panel > strong { display: block; color: #39465e; font-size: 11px; }
+.version-choice-list { margin-top: 8px; display: grid; gap: 6px; }
+.version-choice-list button { width: 100%; min-height: 34px; padding: 7px 9px; border: 1px solid #d9e0f2; border-radius: 7px; color: #405173; text-align: left; font-size: 10px; line-height: 1.5; background: #fff; cursor: pointer; }
+.version-choice-list button:hover { color: var(--brand); border-color: #aebdf0; background: #f2f5ff; }
+.version-choice-list button:disabled { opacity: .55; cursor: not-allowed; }
 .progress-panel { width: 100%; margin-top: 8px; border: 1px solid var(--line); border-radius: 11px; background: rgba(255, 255, 255, .65); }
 .progress-panel summary { padding: 8px 11px; display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; cursor: pointer; list-style: none; }
 .progress-panel summary > span { display: flex; align-items: center; gap: 5px; }.progress-panel summary::-webkit-details-marker { display: none; }.running-copy { color: var(--brand); }

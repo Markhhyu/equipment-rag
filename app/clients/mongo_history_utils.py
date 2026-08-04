@@ -111,7 +111,9 @@ def save_chat_message(session_id: str,
                       trace_id: str = "",
                       sources: List[Dict[str, Any]] = None,
                       requires_human_review: bool = False,
-                      review_reason: str = "") -> str:
+                      review_reason: str = "",
+                      version_scope_options: List[Dict[str, Any]] = None,
+                      version_scope_question: str = "") -> str:
     """
     写入/更新单条会话记录到MongoDB
     支持两种模式：无message_id时新增记录，有message_id时更新已有记录
@@ -141,6 +143,8 @@ def save_chat_message(session_id: str,
         "sources": sources or [],
         "requires_human_review": bool(requires_human_review),
         "review_reason": str(review_reason or ""),
+        "version_scope_options": version_scope_options or [],
+        "version_scope_question": str(version_scope_question or ""),
         "trace_id": trace_id or "",
         "ts": ts
     }

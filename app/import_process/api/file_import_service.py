@@ -123,6 +123,7 @@ def run_graph_task(
     version_label: str = "",
     trust_level: str = "manufacturer_manual",
     device_model: str = "",
+    equipment_version: str = "",
     software_version: str = "",
     firmware_version: str = "",
     hardware_revision: str = "",
@@ -156,6 +157,7 @@ def run_graph_task(
             "version_label": version_label or "legacy-v1",
             "trust_level": normalize_trust_level(trust_level),
             "device_model": device_model,
+            "equipment_version": equipment_version,
             "software_version": software_version,
             "firmware_version": firmware_version,
             "hardware_revision": hardware_revision,
@@ -184,6 +186,7 @@ def run_graph_task(
         init_state["version_label"] = version_label or "legacy-v1"
         init_state["trust_level"] = normalize_trust_level(trust_level)
         init_state["device_model"] = device_model
+        init_state["equipment_version"] = equipment_version
         init_state["software_version"] = software_version
         init_state["firmware_version"] = firmware_version
         init_state["hardware_revision"] = hardware_revision
@@ -283,6 +286,7 @@ async def _enqueue_import(
     publish_after_import: bool,
     trust_level: str = "manufacturer_manual",
     device_model: str = "",
+    equipment_version: str = "",
     software_version: str = "",
     firmware_version: str = "",
     hardware_revision: str = "",
@@ -354,6 +358,7 @@ async def _enqueue_import(
         file_size=total_bytes,
         publish_requested=publish_after_import,
         device_model=device_model,
+        equipment_version=equipment_version,
         software_version=software_version,
         firmware_version=firmware_version,
         hardware_revision=hardware_revision,
@@ -372,6 +377,7 @@ async def _enqueue_import(
         "version_label": stable_version_label,
         "trust_level": normalize_trust_level(trust_level),
         "device_model": device_model,
+        "equipment_version": equipment_version,
         "software_version": software_version,
         "firmware_version": firmware_version,
         "hardware_revision": hardware_revision,
@@ -397,6 +403,7 @@ async def _enqueue_import(
         stable_version_label,
         normalize_trust_level(trust_level),
         device_model,
+        equipment_version,
         software_version,
         firmware_version,
         hardware_revision,
@@ -475,6 +482,7 @@ async def import_managed_document(
     version_label: str = Form(default=""),
     trust_level: str = Form(default="manufacturer_manual"),
     device_model: str = Form(default=""),
+    equipment_version: str = Form(default=""),
     software_version: str = Form(default=""),
     firmware_version: str = Form(default=""),
     hardware_revision: str = Form(default=""),
@@ -499,6 +507,7 @@ async def import_managed_document(
             version_label=version_label,
             trust_level=trust_level,
             device_model=device_model,
+            equipment_version=equipment_version,
             software_version=software_version,
             firmware_version=firmware_version,
             hardware_revision=hardware_revision,
@@ -844,6 +853,7 @@ async def retry_run(
         str(run.input.get("version_label") or "legacy-v1"),
         str(run.input.get("trust_level") or "manufacturer_manual"),
         str(run.input.get("device_model") or ""),
+        str(run.input.get("equipment_version") or ""),
         str(run.input.get("software_version") or ""),
         str(run.input.get("firmware_version") or ""),
         str(run.input.get("hardware_revision") or ""),
