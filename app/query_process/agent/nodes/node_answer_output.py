@@ -408,6 +408,7 @@ def step_4_write_history(
             review_reason=str(state.get("review_reason") or ""),
             version_scope_options=state.get("version_scope_options") or [],
             version_scope_question=str(state.get("rewritten_query") or state.get("original_query") or ""),
+            selected_version_context=state.get("selected_version_context") or [],
         )
     except Exception as exc:
         logger.error(f"写入MongoDB历史记录失败：{exc}", exc_info=True)
@@ -432,10 +433,13 @@ def node_answer_output(state: QueryGraphState) -> QueryGraphState:
         state["answer_policy"] = policy.action
         state["requires_human_review"] = policy.requires_human_review
         state["review_reason"] = policy.review_reason
-        if policy.answer:
-            state["answer"] = policy.answer
-        if state.get("version_scope_options") and not str(state.get("answer") or "").strip():
+        if state.get("version_scope_options"):
             state["answer"] = _version_scope_clarification(state.get("version_scope_options") or [])
+            state["answer_policy"] = "clarify_version"
+            state["requires_human_review"] = False
+            state["review_reason"] = ""
+        elif policy.answer:
+            state["answer"] = policy.answer
         answer_exists = step_1_check_answer(state)
         if not answer_exists:
             prompt = step_2_construct_prompt(state)

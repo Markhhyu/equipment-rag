@@ -47,6 +47,18 @@ QUERY_OUTPUT_FIELDS = [
 ]
 
 
+def build_query_filter(tenant_id: str, item_names: list[str], revision_ids: list[str] | None = None) -> str:
+    quoted_item_names = ", ".join(f'"{escape_milvus_literal(value)}"' for value in item_names)
+    expressions = [f"item_name in [{quoted_item_names}]"] if item_names else []
+    cleaned_revision_ids = [str(value).strip() for value in revision_ids or [] if str(value).strip()]
+    if cleaned_revision_ids:
+        quoted_revision_ids = ", ".join(
+            f'"{escape_milvus_literal(value)}"' for value in cleaned_revision_ids
+        )
+        expressions.append(f"revision_id in [{quoted_revision_ids}]")
+    return tenant_filter(tenant_id, " and ".join(f"({expression})" for expression in expressions) or None)
+
+
 def node_search_embedding(state):
     """
     使用BGE-M3和Milvus执行稠密向量、稀疏向量混合检索。
@@ -104,13 +116,10 @@ def node_search_embedding(state):
         if not collection_name:
             raise ValueError("Milvus配置错误：CHUNKS_COLLECTION环境变量为空")
 
-        quoted_item_names = ", ".join(
-            f'"{escape_milvus_literal(item_name)}"'
-            for item_name in item_names
-        )
-        filter_expression = tenant_filter(
+        filter_expression = build_query_filter(
             str(state.get("tenant_id") or "local"),
-            f"item_name in [{quoted_item_names}]",
+            item_names,
+            state.get("query_revision_ids") or [],
         )
         logger.info(f"Milvus检索集合={collection_name}，过滤条件={filter_expression}")
 
@@ -125,7 +134,11 @@ def node_search_embedding(state):
         with start_rag_observation(
             as_type="retriever",
             name="milvus-hybrid-retrieval",
-            input_data={"query": query, "item_names": item_names},
+            input_data={
+                "query": query,
+                "item_names": item_names,
+                "revision_ids": state.get("query_revision_ids") or [],
+            },
             metadata={
                 "collection": collection_name,
                 "filter": filter_expression,

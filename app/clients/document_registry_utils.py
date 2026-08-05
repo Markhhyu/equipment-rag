@@ -276,6 +276,11 @@ class DocumentRegistry(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def list_active_versions(self, tenant_id: str, item_names: Iterable[str]) -> list[dict[str, Any]]:
+        """Return active governed revisions applicable to any requested equipment name."""
+        raise NotImplementedError
+
+    @abstractmethod
     def list_audit_logs(self, tenant_id: str, document_id: str = "", limit: int = 100) -> list[dict[str, Any]]:
         raise NotImplementedError
 
@@ -518,6 +523,22 @@ class InMemoryDocumentRegistry(DocumentRegistry):
                 if tenant == tenant_id and item["document_id"] == document_id
             ]
             result["versions"].sort(key=lambda value: value.get("created_at"), reverse=True)
+            return _public(result)
+
+    def list_active_versions(self, tenant_id: str, item_names: Iterable[str]) -> list[dict[str, Any]]:
+        requested = {str(value).strip().casefold() for value in item_names if str(value).strip()}
+        if not requested:
+            return []
+        with self._lock:
+            result = []
+            for (tenant, _), version in self.versions.items():
+                if tenant != tenant_id:
+                    continue
+                document = self.documents.get((tenant_id, str(version.get("document_id") or "")))
+                version_names = {str(value).strip().casefold() for value in version.get("item_names") or []}
+                if document and requested.intersection(version_names) and _revision_is_active(document, version):
+                    result.append(deepcopy(version))
+            result.sort(key=lambda value: (str(value.get("document_id") or ""), str(value.get("revision_id") or "")))
             return _public(result)
 
     def list_audit_logs(self, tenant_id: str, document_id: str = "", limit: int = 100) -> list[dict[str, Any]]:
@@ -871,6 +892,51 @@ class MongoDocumentRegistry(DocumentRegistry):
                     version["status"] = VersionStatus.ARCHIVED.value
         result = _document_view(document)
         result["versions"] = versions
+        return _public(result)
+
+    def list_active_versions(self, tenant_id: str, item_names: Iterable[str]) -> list[dict[str, Any]]:
+        requested = list(dict.fromkeys(str(value).strip() for value in item_names if str(value).strip()))
+        if not requested:
+            return []
+        documents = list(
+            self.documents.find(
+                {
+                    "tenant_id": tenant_id,
+                    "status": DocumentStatus.ACTIVE.value,
+                    "item_names": {"$in": requested},
+                },
+                {"_id": 0},
+            )
+        )
+        if not documents:
+            return []
+        revision_ids = list(
+            {
+                revision_id
+                for document in documents
+                for revision_id in _active_revision_ids(document)
+            }
+        )
+        versions = list(
+            self.versions.find(
+                {
+                    "tenant_id": tenant_id,
+                    "revision_id": {"$in": revision_ids},
+                    "status": VersionStatus.ACTIVE.value,
+                    "import_status": "completed",
+                    "item_names": {"$in": requested},
+                },
+                {"_id": 0},
+            )
+        )
+        documents_by_id = {str(document.get("document_id") or ""): document for document in documents}
+        result = [
+            version
+            for version in versions
+            if (document := documents_by_id.get(str(version.get("document_id") or "")))
+            and _revision_is_active(document, version)
+        ]
+        result.sort(key=lambda value: (str(value.get("document_id") or ""), str(value.get("revision_id") or "")))
         return _public(result)
 
     def list_audit_logs(self, tenant_id: str, document_id: str = "", limit: int = 100) -> list[dict[str, Any]]:

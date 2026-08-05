@@ -113,7 +113,8 @@ def save_chat_message(session_id: str,
                       requires_human_review: bool = False,
                       review_reason: str = "",
                       version_scope_options: List[Dict[str, Any]] = None,
-                      version_scope_question: str = "") -> str:
+                      version_scope_question: str = "",
+                      selected_version_context: List[Dict[str, Any]] = None) -> str:
     """
     写入/更新单条会话记录到MongoDB
     支持两种模式：无message_id时新增记录，有message_id时更新已有记录
@@ -145,6 +146,7 @@ def save_chat_message(session_id: str,
         "review_reason": str(review_reason or ""),
         "version_scope_options": version_scope_options or [],
         "version_scope_question": str(version_scope_question or ""),
+        "selected_version_context": selected_version_context or [],
         "trace_id": trace_id or "",
         "ts": ts
     }
@@ -155,6 +157,9 @@ def save_chat_message(session_id: str,
         document["feedback_value"] = None
         document["feedback_comment"] = ""
         document["feedback_updated_at"] = None
+        document["resolution_status"] = None
+        document["resolution_comment"] = ""
+        document["resolution_updated_at"] = None
 
     # 获取全局的HistoryMongoTool实例，使用单例模式
     mongo_tool = get_history_mongo_tool()
@@ -217,6 +222,39 @@ def update_message_feedback(trace_id: str, value: int, comment: str = "") -> int
 
     except Exception as e:
         logging.error(f"Error updating feedback, trace_id={trace_id}: {e}")
+        return 0
+
+
+def update_message_resolution(trace_id: str, status: str, comment: str = "") -> int:
+    """保存用户对本轮问题是否解决的明确确认。"""
+
+    if not trace_id:
+        raise ValueError("trace_id不能为空")
+    if status not in {"solved", "partial", "unsolved"}:
+        raise ValueError("解决结果只能是 solved、partial 或 unsolved")
+
+    safe_comment = (comment or "").strip()[:500]
+    mongo_tool = get_history_mongo_tool()
+    try:
+        result = mongo_tool.chat_message.update_one(
+            {"trace_id": trace_id, "role": "assistant"},
+            {
+                "$set": {
+                    "resolution_status": status,
+                    "resolution_comment": safe_comment,
+                    "resolution_updated_at": datetime.now().timestamp(),
+                }
+            },
+        )
+        logging.info(
+            "Updated resolution outcome, trace_id=%s, status=%s, matched=%s",
+            trace_id,
+            status,
+            result.matched_count,
+        )
+        return result.matched_count
+    except Exception as exc:
+        logging.error("Error updating resolution outcome, trace_id=%s: %s", trace_id, exc)
         return 0
 
 def update_message_item_names(ids: List[str], item_names: List[str]) -> int:

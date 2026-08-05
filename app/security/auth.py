@@ -36,7 +36,7 @@ async def authenticate(
         return Principal(
             key_id="local-development",
             tenant_id="local",
-            roles=frozenset({"admin", "query", "import"}),
+            roles=frozenset({"admin", "query", "import", "workflow"}),
             authenticated=False,
         )
 

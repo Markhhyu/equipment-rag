@@ -215,6 +215,7 @@ def resolve_version_scope(
     question: str,
     documents: List[Dict[str, Any]],
     known_profiles: Dict[str, List[tuple[str, ...]]] | None = None,
+    selected_scope_ids: set[str] | None = None,
 ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """识别同一文档族的并行适用版本；无法唯一匹配时阻止混答并返回可选范围。"""
     normalized_question = "".join(str(question or "").casefold().split())
@@ -243,7 +244,8 @@ def resolve_version_scope(
         token_matches = {
             profile
             for profile in profiles
-            if f"version_scope:{_profile_scope_id(profile)}" in normalized_question
+            if _profile_scope_id(profile) in (selected_scope_ids or set())
+            or f"version_scope:{_profile_scope_id(profile)}" in normalized_question
         }
         matched = token_matches or {
             profile
@@ -477,6 +479,11 @@ def node_rerank(state):
                 question,
                 scored_docs,
                 known_profiles=known_profiles,
+                selected_scope_ids={
+                    str(item.get("scope_id") or "")
+                    for item in state.get("selected_version_context") or []
+                    if item.get("scope_id")
+                },
             )
             topk_docs = step_3_topk(scored_docs, preserve_image_docs=preserve_image_docs)
             if rerank_observation is not None:

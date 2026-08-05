@@ -10,6 +10,7 @@ from app.query_process.agent.nodes.node_rrf import node_rrf
 from app.query_process.agent.nodes.node_search_embedding import node_search_embedding
 from app.query_process.agent.nodes.node_search_embedding_hyde import node_search_embedding_hyde
 from app.query_process.agent.nodes.node_web_search_mcp import node_web_search_mcp
+from app.query_process.agent.nodes.node_version_context import node_version_context
 from app.query_process.agent.state import QueryGraphState
 from app.runtime.checkpointing import get_checkpointer
 
@@ -17,6 +18,7 @@ from app.runtime.checkpointing import get_checkpointer
 builder = StateGraph(QueryGraphState)
 
 builder.add_node("node_item_name_confirm", observed_graph_node("query", "node_item_name_confirm", node_item_name_confirm))
+builder.add_node("node_version_context", observed_graph_node("query", "node_version_context", node_version_context))
 builder.add_node("node_multi_search", lambda state: state)
 builder.add_node("node_search_embedding", observed_graph_node("query", "node_search_embedding", node_search_embedding))
 builder.add_node("node_search_embedding_hyde", observed_graph_node("query", "node_search_embedding_hyde", node_search_embedding_hyde))
@@ -37,10 +39,19 @@ builder.set_entry_point("node_item_name_confirm")
 def route_after_item_confirm(state: QueryGraphState):
     if state.get("answer"):
         return "node_answer_output"
-    return "node_multi_search"
+    return "node_version_context"
 
 
 builder.add_conditional_edges("node_item_name_confirm", route_after_item_confirm)
+
+
+def route_after_version_context(state: QueryGraphState):
+    if state.get("answer"):
+        return "node_answer_output"
+    return "node_multi_search"
+
+
+builder.add_conditional_edges("node_version_context", route_after_version_context)
 
 builder.add_edge("node_multi_search", "node_search_embedding")
 builder.add_edge("node_multi_search", "node_search_embedding_hyde")

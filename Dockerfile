@@ -33,6 +33,6 @@ COPY --from=frontend-builder /frontend/dist ./frontend/dist
 # 日志和处理结果使用固定目录，便于 Compose 挂载持久化卷。
 RUN mkdir -p /app/logs /app/output
 
-EXPOSE 8000 8001
+EXPOSE 8000 8001 8002
 
 CMD ["uvicorn", "app.query_process.api.query_service:app", "--host", "0.0.0.0", "--port", "8001"]

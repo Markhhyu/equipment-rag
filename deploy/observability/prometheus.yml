@@ -1,5 +1,5 @@
 # Prometheus主配置。
-# Prometheus每15秒访问两个FastAPI服务的/metrics，把数值保存为时间序列。
+# Prometheus每15秒访问三个FastAPI服务的/metrics，把数值保存为时间序列。
 # 如果某个服务不健康，Prometheus页面的Targets菜单会显示DOWN，并给出错误原因。
 global:
   scrape_interval: 15s
@@ -17,3 +17,9 @@ scrape_configs:
     metrics_path: /metrics/
     static_configs:
       - targets: ["query-api:8001"]
+
+  # 厂商无关工作流服务：观察人工复核接口的请求量、延迟和错误。
+  - job_name: equipment-rag-workflow
+    metrics_path: /metrics/
+    static_configs:
+      - targets: ["workflow-api:8002"]

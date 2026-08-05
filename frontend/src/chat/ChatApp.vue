@@ -4,8 +4,10 @@ import {
   ChatDotRound,
   Check,
   CircleClose,
+  CircleCheck,
   Close,
   Connection,
+  DataAnalysis,
   Delete,
   DocumentAdd,
   Files,
@@ -15,8 +17,10 @@ import {
   Picture,
   Plus,
   Promotion,
+  Refresh,
   Setting,
   UploadFilled,
+  Warning,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import ApiKeyDialog from '../shared/ApiKeyDialog.vue'
@@ -32,6 +36,7 @@ import {
 
 type Role = 'user' | 'assistant'
 type MessageStatus = 'ready' | 'streaming' | 'error'
+type ResolutionStatus = 'solved' | 'partial' | 'unsolved'
 
 interface VersionChoice {
   scope_id: string
@@ -43,6 +48,7 @@ interface VersionChoice {
   hardware_revision?: string
   site_id?: string
   asset_ids?: string
+  item_names?: string[]
 }
 
 interface VersionScopeGroup {
@@ -58,6 +64,8 @@ interface ChatMessage {
   imageUrls: string[]
   traceId?: string
   feedback?: 0 | 1 | null
+  resolutionStatus?: ResolutionStatus | null
+  resolutionSubmitting?: boolean
   time?: number | string
   status: MessageStatus
   doneList?: string[]
@@ -66,6 +74,7 @@ interface ChatMessage {
   requiresHumanReview?: boolean
   reviewReason?: string
   versionScopeOptions?: VersionScopeGroup[]
+  selectedVersionContext?: VersionChoice[]
 }
 
 interface AnswerSource {
@@ -118,10 +127,12 @@ interface HistoryResponse {
     image_urls?: string[]
     trace_id?: string
     feedback_value?: 0 | 1 | null
+    resolution_status?: ResolutionStatus | null
     sources?: AnswerSource[]
     requires_human_review?: boolean
     review_reason?: string
     version_scope_options?: VersionScopeGroup[]
+    selected_version_context?: VersionChoice[]
     ts?: number | string
   }>
 }
@@ -149,9 +160,18 @@ let activeStream: AbortController | null = null
 
 const importUrl = siblingServiceUrl('8000', '/import.html')
 const knowledgeUrl = siblingServiceUrl('8000', '/knowledge.html')
+const analyticsUrl = '/analytics.html'
 const shortSessionId = computed(() => sessionId.value.slice(0, 8))
 const canSend = computed(() => !sending.value && (!!question.value.trim() || pendingImages.value.length > 0))
 const attachmentHint = computed(() => `每轮最多 ${attachmentConfig.value.max_files} 张，单张不超过 ${formatBytes(attachmentConfig.value.max_bytes)}`)
+const currentVersionContext = computed(() => {
+  for (let index = messages.value.length - 1; index >= 0; index -= 1) {
+    const message = messages.value[index]
+    if (message.versionScopeOptions?.length) return []
+    if (message.selectedVersionContext?.length) return message.selectedVersionContext
+  }
+  return []
+})
 
 function authErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)
@@ -197,10 +217,12 @@ async function loadHistory(): Promise<void> {
       imageUrls: item.image_urls ?? [],
       traceId: item.trace_id,
       feedback: item.feedback_value,
+      resolutionStatus: item.resolution_status,
       sources: item.sources ?? [],
       requiresHumanReview: item.requires_human_review ?? false,
       reviewReason: item.review_reason ?? '',
       versionScopeOptions: item.version_scope_options ?? [],
+      selectedVersionContext: item.selected_version_context ?? [],
       time: item.ts,
       status: 'ready',
     }))
@@ -284,6 +306,7 @@ function applySseMessage(message: SseMessage, assistant: ChatMessage): void {
     assistant.requiresHumanReview = Boolean(data.requires_human_review)
     assistant.reviewReason = String(data.review_reason ?? '')
     assistant.versionScopeOptions = (data.version_scope_options as VersionScopeGroup[] | undefined) ?? []
+    assistant.selectedVersionContext = (data.selected_version_context as VersionChoice[] | undefined) ?? []
     assistant.status = 'ready'
   } else if (message.event === 'error') {
     assistant.status = 'error'
@@ -292,7 +315,7 @@ function applySseMessage(message: SseMessage, assistant: ChatMessage): void {
   void scrollToBottom()
 }
 
-async function sendMessage(versionChoice?: VersionChoice): Promise<void> {
+async function sendMessage(versionChoice?: VersionChoice, resetVersionContext = false): Promise<void> {
   if (!canSend.value) return
   const text = question.value.trim()
   const selectedImages = [...pendingImages.value]
@@ -323,6 +346,7 @@ async function sendMessage(versionChoice?: VersionChoice): Promise<void> {
         is_stream: true,
         image_refs: imageRefs,
         version_scope_id: versionChoice?.scope_id ?? '',
+        reset_version_context: resetVersionContext,
       }),
     }, true)
     const submitted = await response.json() as { trace_id?: string }
@@ -357,6 +381,15 @@ async function selectVersion(choice: VersionChoice): Promise<void> {
   await sendMessage(choice)
 }
 
+async function requestVersionSwitch(): Promise<void> {
+  if (sending.value || !currentVersionContext.value.length) return
+  const current = currentVersionContext.value[0]
+  const device = current.device_model || current.item_names?.[0] || '当前设备'
+  question.value = `请重新选择 ${device} 的适用版本`
+  await nextTick()
+  await sendMessage(undefined, true)
+}
+
 async function submitFeedback(message: ChatMessage, value: 0 | 1): Promise<void> {
   if (!message.traceId || message.status !== 'ready') return
   try {
@@ -368,6 +401,28 @@ async function submitFeedback(message: ChatMessage, value: 0 | 1): Promise<void>
     ElMessage.success('感谢反馈，已用于后续效果分析')
   } catch (error) {
     ElMessage.error(`反馈提交失败：${authErrorMessage(error)}`)
+  }
+}
+
+async function submitResolution(message: ChatMessage, status: ResolutionStatus): Promise<void> {
+  if (!message.traceId || message.status !== 'ready' || message.resolutionSubmitting) return
+  message.resolutionSubmitting = true
+  try {
+    await apiFetch('/resolution', apiKey.value, {
+      method: 'POST',
+      body: JSON.stringify({ trace_id: message.traceId, status }),
+    }, true)
+    message.resolutionStatus = status
+    const labels: Record<ResolutionStatus, string> = {
+      solved: '已记录：问题已解决',
+      partial: '已记录：问题部分解决',
+      unsolved: '已记录：问题尚未解决',
+    }
+    ElMessage.success(labels[status])
+  } catch (error) {
+    ElMessage.error(`解决结果提交失败：${authErrorMessage(error)}`)
+  } finally {
+    message.resolutionSubmitting = false
   }
 }
 
@@ -451,17 +506,23 @@ onBeforeUnmount(() => {
       <div class="sidebar-footer">
         <a :href="importUrl" class="sidebar-link"><el-icon><DocumentAdd /></el-icon>知识库导入</a>
         <a :href="knowledgeUrl" class="sidebar-link"><el-icon><Files /></el-icon>知识库治理</a>
+        <a :href="analyticsUrl" class="sidebar-link"><el-icon><DataAnalysis /></el-icon>问答运营看板</a>
         <button class="sidebar-link" @click="settingsVisible = true"><el-icon><Setting /></el-icon>连接设置</button>
       </div>
     </aside>
 
     <main class="chat-main">
       <header class="chat-header">
-        <div>
+        <div class="header-status">
           <strong>设备咨询</strong>
           <span><i class="online-dot" /> 服务已连接</span>
+          <div v-if="currentVersionContext.length" class="version-lock">
+            <span>{{ currentVersionContext.map((item) => item.label).join('；') }}</span>
+            <button :disabled="sending" title="重新选择适用版本" @click="requestVersionSwitch"><el-icon><Refresh /></el-icon></button>
+          </div>
         </div>
         <div class="header-actions">
+          <a class="top-button" :href="analyticsUrl" title="打开问答运营看板"><el-icon><DataAnalysis /></el-icon><span class="desktop-label">运营看板</span></a>
           <button class="top-button" @click="settingsVisible = true"><el-icon><Connection /></el-icon><span class="desktop-label">API 设置</span></button>
           <button class="top-button danger" :disabled="sending" @click="clearCurrentSession(false)"><el-icon><Delete /></el-icon><span class="desktop-label">清空会话</span></button>
         </div>
@@ -555,6 +616,30 @@ onBeforeUnmount(() => {
                   </article>
                 </div>
               </details>
+
+              <div
+                v-if="message.role === 'assistant' && message.traceId && message.status === 'ready' && !message.versionScopeOptions?.length"
+                class="resolution-panel"
+              >
+                <span>本次问题处理结果</span>
+                <div class="resolution-actions">
+                  <button
+                    :class="{ active: message.resolutionStatus === 'solved' }"
+                    :disabled="message.resolutionSubmitting"
+                    @click="submitResolution(message, 'solved')"
+                  ><el-icon><CircleCheck /></el-icon>已解决</button>
+                  <button
+                    :class="{ active: message.resolutionStatus === 'partial' }"
+                    :disabled="message.resolutionSubmitting"
+                    @click="submitResolution(message, 'partial')"
+                  ><el-icon><Warning /></el-icon>部分解决</button>
+                  <button
+                    :class="{ active: message.resolutionStatus === 'unsolved' }"
+                    :disabled="message.resolutionSubmitting"
+                    @click="submitResolution(message, 'unsolved')"
+                  ><el-icon><CircleClose /></el-icon>未解决</button>
+                </div>
+              </div>
 
               <div class="message-meta">
                 <span>{{ formatTime(message.time) }}</span>

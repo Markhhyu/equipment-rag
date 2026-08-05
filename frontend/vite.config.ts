@@ -10,6 +10,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         chat: resolve(__dirname, 'chat.html'),
+        analytics: resolve(__dirname, 'analytics.html'),
         import: resolve(__dirname, 'import.html'),
         knowledge: resolve(__dirname, 'knowledge.html'),
       },

@@ -82,6 +82,7 @@ x-app-environment: &app-environment
   MONGO_DB_NAME: ${MONGO_DB_NAME:-equipment_rag}
   RUN_STORE_BACKEND: ${RUN_STORE_BACKEND:-mongodb}
   RUN_STORE_COLLECTION: ${RUN_STORE_COLLECTION:-agent_runs}
+  QUERY_ANALYTICS_COLLECTION: ${QUERY_ANALYTICS_COLLECTION:-query_outcomes}
   RUN_MAX_ATTEMPTS: ${RUN_MAX_ATTEMPTS:-3}
   RUN_LEASE_SECONDS: ${RUN_LEASE_SECONDS:-900}
   LANGGRAPH_CHECKPOINT_BACKEND: ${LANGGRAPH_CHECKPOINT_BACKEND:-mongodb}
@@ -187,6 +188,22 @@ services:
       retries: 5
       start_period: 90s
 
+  # 人工复核工作流 API：仅提供厂商无关协议，企微、钉钉、飞书和 OA 由外部连接器对接。
+  workflow-api:
+    <<: *app-service
+    command: ["uvicorn", "app.workflow.api.workflow_service:app", "--host", "0.0.0.0", "--port", "8002"]
+    depends_on:
+      mongo:
+        condition: service_healthy
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${WORKFLOW_API_PORT:-8002}:8002"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
   # MongoDB 保存会话历史、Agent 运行状态和 LangGraph 检查点。
   mongo:
     image: mongo:8.2.12-noble
@@ -290,6 +307,8 @@ services:
       import-api:
         condition: service_healthy
       query-api:
+        condition: service_healthy
+      workflow-api:
         condition: service_healthy
 
   # Grafana读取Prometheus并展示仓库自带的RAG仪表盘。

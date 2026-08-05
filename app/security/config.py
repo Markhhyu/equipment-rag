@@ -9,7 +9,7 @@ from typing import Any
 
 
 _TENANT_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$")
-_KNOWN_ROLES = frozenset({"admin", "query", "import"})
+_KNOWN_ROLES = frozenset({"admin", "query", "import", "workflow"})
 
 
 def _as_bool(name: str, default: bool = False) -> bool:

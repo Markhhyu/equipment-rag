@@ -634,7 +634,7 @@ try {
         $mineruStarted = Start-Mineru
     }
 
-    Write-Step "构建并启动导入 API 与查询 API"
+    Write-Step "构建并启动导入 API、查询 API 与工作流 API"
     $apiArgs = @(
         "compose", "--project-name", "equipment-rag", "-f", $CoreCompose,
         "up", "-d"
@@ -642,13 +642,15 @@ try {
     if (-not $SkipBuild) {
         $apiArgs += "--build"
     }
-    $apiArgs += @("import-api", "query-api")
+    $apiArgs += @("import-api", "query-api", "workflow-api")
     Invoke-DockerCommand -DockerArgs $apiArgs
 
     $importPort = Get-DotEnvValue -Name "IMPORT_API_PORT" -DefaultValue "8000"
     $queryPort = Get-DotEnvValue -Name "QUERY_API_PORT" -DefaultValue "8001"
+    $workflowPort = Get-DotEnvValue -Name "WORKFLOW_API_PORT" -DefaultValue "8002"
     Wait-HttpService -Name "导入 API" -Url "http://127.0.0.1:$importPort/health" -Timeout $TimeoutSeconds
     Wait-HttpService -Name "查询 API" -Url "http://127.0.0.1:$queryPort/health" -Timeout $TimeoutSeconds
+    Wait-HttpService -Name "工作流 API" -Url "http://127.0.0.1:$workflowPort/health" -Timeout $TimeoutSeconds
     if ($mineruStarted) {
         Test-MineruFromImportApi
     }
@@ -688,6 +690,7 @@ try {
     Write-Host "聊天页面：          http://127.0.0.1:$queryPort/chat.html"
     Write-Host "导入 API 文档：     http://127.0.0.1:$importPort/docs"
     Write-Host "查询 API 文档：     http://127.0.0.1:$queryPort/docs"
+    Write-Host "工作流 API 文档：   http://127.0.0.1:$workflowPort/docs"
     if ($mineruStarted) { Write-Host "MinerU API：        http://127.0.0.1:$MineruPort/docs" }
     if (-not $NoLangfuse) { Write-Host "Langfuse：          http://127.0.0.1:3000" }
     if (-not $NoObservability) {

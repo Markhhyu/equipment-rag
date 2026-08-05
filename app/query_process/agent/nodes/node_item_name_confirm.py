@@ -553,6 +553,7 @@ def node_item_name_confirm(state: QueryGraphState) -> QueryGraphState:
         if selected_version and version_item_names:
             item_names = version_item_names
             rewritten_query = _rewrite_version_question(selected_version, previous_version_query)
+            state["selected_version_context"] = [selected_version]
             logger.info(
                 f"Node: 用户确认上轮适用版本: {selected_version.get('label')}，"
                 f"scope_id={selected_version.get('scope_id')}"
@@ -596,6 +597,9 @@ def node_item_name_confirm(state: QueryGraphState) -> QueryGraphState:
             {
                 "role": message.get("role", ""),
                 "text": message.get("text", ""),
+                "item_names": message.get("item_names", []),
+                "selected_version_context": message.get("selected_version_context", []),
+                "version_scope_options": message.get("version_scope_options", []),
             }
             for message in history
         ]

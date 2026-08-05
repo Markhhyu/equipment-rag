@@ -249,6 +249,7 @@ docker compose logs --tail 200 import-api query-api
 | 导入页面 | <http://127.0.0.1:8000/import.html> | 上传 PDF/Markdown 并查看导入进度 |
 | 知识库治理 | <http://127.0.0.1:8000/knowledge.html> | 文档版本、发布、回滚、停用和操作审计 |
 | 聊天页面 | <http://127.0.0.1:8001/chat.html> | 多轮问答、结构化来源、图片展示和反馈 |
+| 问答运营看板 | <http://127.0.0.1:8001/analytics.html> | 每日问答、技术成功率、解决结果和待关注问题 |
 | 导入 API 文档 | <http://127.0.0.1:8000/docs> | 导入接口 Swagger |
 | 查询 API 文档 | <http://127.0.0.1:8001/docs> | 问答接口 Swagger |
 | MinIO 控制台 | <http://127.0.0.1:9001> | 查看原始文件和图片对象 |
@@ -490,10 +491,26 @@ curl -N "http://127.0.0.1:8001/stream/demo-session-002"
 | `GET` | `/history/{session_id}` | 获取会话历史 |
 | `DELETE` | `/history/{session_id}` | 清空当前租户会话 |
 | `POST` | `/feedback` | 提交点赞/点踩 |
+| `POST` | `/resolution` | 确认本轮问题已解决、部分解决或未解决 |
+| `GET` | `/analytics/summary` | 查询租户级问答运营汇总、趋势和待关注问题 |
 | `GET` | `/runs/{run_id}` | 查看持久化运行状态 |
 | `POST` | `/runs/{run_id}/retry` | 从最近 Checkpoint 重试失败运行 |
+| `POST` | `/workflow/cases` | 创建厂商无关的人工复核工单，支持幂等键 |
+| `GET` | `/workflow/cases/{case_id}` | 查询复核工单和当前状态 |
+| `POST` | `/workflow/cases/{case_id}/actions` | 分配、开始复核、解决、驳回或取消工单 |
+| `GET` | `/workflow/events` | 供外部连接器增量读取标准事件 |
+| `POST` | `/workflow/subscriptions` | 注册外部连接器订阅和 HMAC 签名密钥 |
+| `GET` | `/workflow/deliveries` | 获取待投递事件，不绑定具体厂商协议 |
+| `POST` | `/workflow/deliveries/{delivery_id}/ack` | 确认外部系统投递结果 |
 
 导入与查询服务都有 `/runs` 接口，具体请求结构以各自 Swagger 页面为准。
+
+人工复核工作流由独立 `workflow-api` 提供，默认地址为 <http://127.0.0.1:8002/docs>。问答接口只返回
+`requires_human_review`、`review_reason`、`trace_id` 和证据上下文；调用方使用这些字段创建工单。企微、钉钉、
+飞书、OA 或其他系统通过外部连接器消费标准事件并确认投递，核心服务不导入厂商 SDK，也不把厂商字段写入问答节点。
+
+标准状态固定为 `pending`、`assigned`、`in_review`、`resolved`、`rejected`、`cancelled`。所有创建和动作请求
+都携带 `idempotency_key`；投递包含 `delivery_id`、重试计数、下次重试时间和 `sha256=` HMAC 签名。
 
 ---
 
@@ -538,7 +555,8 @@ MINERU_LANGUAGE=ch_server
 | 工具 | 观察范围 | 主要用途 |
 |---|---|---|
 | Langfuse | 单次导入或问答 | 查看节点、模型调用、Token、检索摘要、调优参数和用户反馈 |
-| Prometheus + Grafana | 长期运行趋势 | 查看吞吐、错误率、P95 延迟和节点性能 |
+| Prometheus + Grafana | 技术运行趋势 | 查看吞吐、错误率、P95 延迟和节点性能 |
+| 问答运营看板 | 业务解决结果 | 查看每日问答、直接解决、部分解决、未解决、待确认和人工复核 |
 | 黄金数据集评测 | 多版本效果对比 | 判断调参后 Recall、MRR、关键词、安全词和引用是否改善 |
 
 首次进入 Langfuse 后创建组织、项目和 API Key，再把以下内容写入根目录 `.env`：
@@ -635,6 +653,7 @@ equipment-rag-agent/
 │  ├─ conf/                    # 模型、检索、图片和服务配置
 │  ├─ import_process/          # 文档导入 API、页面和 LangGraph
 │  ├─ query_process/           # 问答 API、页面和 LangGraph
+│  ├─ workflow/                # 独立人工复核 API、事件投递协议和连接器边界
 │  ├─ model/reranker/          # BGE / Qwen Reranker Provider
 │  ├─ observability/           # Langfuse、Prometheus、质量指标
 │  ├─ runtime/                 # 运行注册表、租约和 Checkpoint

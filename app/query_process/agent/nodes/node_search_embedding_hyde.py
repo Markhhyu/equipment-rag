@@ -11,8 +11,7 @@ from app.core.load_prompt import load_prompt
 from app.core.logger import logger
 from app.lm.embedding_utils import generate_embeddings
 from app.lm.lm_utils import get_llm_client
-from app.query_process.agent.nodes.node_search_embedding import QUERY_OUTPUT_FIELDS
-from app.security.tenancy import escape_milvus_literal, tenant_filter
+from app.query_process.agent.nodes.node_search_embedding import QUERY_OUTPUT_FIELDS, build_query_filter
 from app.utils.task_utils import add_done_task, add_running_task
 
 
@@ -45,6 +44,7 @@ def step_2_search_embedding_hyde(
     rewritten_query: str,
     hyde_doc: str,
     item_names: Optional[Iterable[str]] = None,
+    revision_ids: Optional[Iterable[str]] = None,
     tenant_id: str = "local",
     req_limit: int = 10,
     top_k: int = 5,
@@ -78,15 +78,11 @@ def step_2_search_embedding_hyde(
         raise ValueError("Milvus配置错误：CHUNKS_COLLECTION环境变量为空")
 
     cleaned_item_names = [str(value).strip() for value in (item_names or []) if str(value).strip()]
-    item_expression = None
-    if cleaned_item_names:
-        quoted_names = ", ".join(
-            f'"{escape_milvus_literal(item_name)}"'
-            for item_name in cleaned_item_names
-        )
-        item_expression = f"item_name in [{quoted_names}]"
-
-    filter_expression = tenant_filter(str(tenant_id or "local"), item_expression)
+    filter_expression = build_query_filter(
+        str(tenant_id or "local"),
+        cleaned_item_names,
+        [str(value) for value in revision_ids or []],
+    )
     fields = list(output_fields or QUERY_OUTPUT_FIELDS)
     logger.info(
         f"执行HyDE混合检索，集合={collection_name}，过滤条件={filter_expression}，"
@@ -150,6 +146,7 @@ def node_search_embedding_hyde(state):
                 rewritten_query=query,
                 hyde_doc=hyde_document,
                 item_names=item_names,
+                revision_ids=state.get("query_revision_ids") or [],
                 tenant_id=str(state.get("tenant_id") or "local"),
                 req_limit=rag_tuning_config.retrieval_candidate_limit,
                 top_k=rag_tuning_config.retrieval_result_limit,

@@ -5,7 +5,7 @@ import uuid
 from typing import Literal, Optional
 
 import uvicorn
-from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -28,6 +28,7 @@ from app.observability.langfuse_monitor import (
 from app.observability.prometheus_metrics import install_prometheus, observe_feedback, observe_run
 from app.observability.quality_metrics import analyze_query_state
 from app.observability.rag_observability import score_query_result, summarize_image_reasoning
+from app.query_process.analytics import get_query_analytics_store
 from app.runtime.config import load_runtime_config
 from app.runtime.run_store import RunStatus, get_run_store, run_owner
 from app.security.auth import Principal, require_role
@@ -67,6 +68,15 @@ async def chat():
     return FileResponse(chat_html_path)
 
 
+@app.get("/analytics.html")
+async def analytics_page():
+    """返回问答运营看板。"""
+    built_path = FRONTEND_DIST_DIR / "analytics.html"
+    if not built_path.exists():
+        raise HTTPException(status_code=404, detail="运营看板尚未构建，请先执行前端构建")
+    return FileResponse(built_path)
+
+
 class QueryRequest(BaseModel):
     """查询请求数据结构。"""
 
@@ -75,6 +85,7 @@ class QueryRequest(BaseModel):
     is_stream: bool = Field(False, description="是否流式返回")
     image_refs: list[str] = Field(default_factory=list, description="当前租户和会话已上传的图片对象引用")
     version_scope_id: str = Field(default="", max_length=64, description="用户从上一轮澄清中选择的版本范围")
+    reset_version_context: bool = Field(default=False, description="忽略会话锁定版本并重新选择适用范围")
 
 
 class FeedbackRequest(BaseModel):
@@ -83,6 +94,22 @@ class FeedbackRequest(BaseModel):
     trace_id: str = Field(..., min_length=32, max_length=32, description="Langfuse Trace ID")
     value: Literal[0, 1] = Field(..., description="1表示点赞，0表示点踩")
     comment: Optional[str] = Field(default=None, max_length=500, description="用户反馈说明")
+
+
+class ResolutionRequest(BaseModel):
+    """用户对问题是否真正解决的业务确认。"""
+
+    trace_id: str = Field(..., min_length=32, max_length=32, description="问答 Trace ID")
+    status: Literal["solved", "partial", "unsolved"]
+    comment: Optional[str] = Field(default=None, max_length=500)
+
+
+def _record_analytics(method: str, *args) -> None:
+    """统计写入失败不能影响主问答链路，错误保留在日志中供运维修复。"""
+    try:
+        getattr(get_query_analytics_store(), method)(*args)
+    except Exception as exc:
+        logger.exception(f"问答统计写入失败，method={method}，错误={exc}")
 
 
 @app.get("/health")
@@ -156,6 +183,7 @@ def run_query_graph(
     tenant_id: str = "local",
     user_image_refs: Optional[list[str]] = None,
     version_scope_id: str = "",
+    reset_version_context: bool = False,
 ):
     """执行一次完整问答流程。"""
     run_started = time.perf_counter()
@@ -173,6 +201,7 @@ def run_query_graph(
         "is_stream": is_stream,
         "image_refs": user_image_refs or [],
         "version_scope_id": version_scope_id,
+        "reset_version_context": reset_version_context,
     }
     run_store.create(
         trace_id,
@@ -181,6 +210,7 @@ def run_query_graph(
         max_attempts=runtime_config.max_attempts,
         tenant_id=tenant_id,
     )
+    _record_analytics("record_started", tenant_id, trace_id, session_id, user_query)
     owner = run_owner()
     run_store.claim(trace_id, owner, runtime_config.lease_seconds)
 
@@ -192,6 +222,7 @@ def run_query_graph(
         "is_stream": is_stream,
         "user_image_refs": user_image_refs or [],
         "selected_version_scope_id": version_scope_id,
+        "reset_version_context": reset_version_context,
     }
 
     try:
@@ -264,8 +295,20 @@ def run_query_graph(
                 "requires_human_review": bool(final_state.get("requires_human_review")),
                 "review_reason": final_state.get("review_reason") or "",
                 "version_scope_options": final_state.get("version_scope_options") or [],
+                "selected_version_context": final_state.get("selected_version_context") or [],
                 "clarified": quality_report["response"]["clarified"],
                 "visual": visual_summary,
+            },
+        )
+        _record_analytics(
+            "record_completed",
+            tenant_id,
+            trace_id,
+            {
+                "answer_policy": final_state.get("answer_policy") or "answer",
+                "requires_human_review": bool(final_state.get("requires_human_review")),
+                "review_reason": final_state.get("review_reason") or "",
+                "device_names": final_state.get("item_names") or [],
             },
         )
 
@@ -288,6 +331,7 @@ def run_query_graph(
                     "requires_human_review": bool(final_state.get("requires_human_review")),
                     "review_reason": final_state.get("review_reason") or "",
                     "version_scope_options": final_state.get("version_scope_options") or [],
+                    "selected_version_context": final_state.get("selected_version_context") or [],
                     "trace_id": trace_id,
                     "need_visual_reasoning": bool(final_state.get("need_visual_reasoning")),
                     "image_reasoning_status": final_state.get("image_reasoning_status") or "not_required",
@@ -309,6 +353,7 @@ def run_query_graph(
             run_store.fail(trace_id, owner, str(exc))
         except RuntimeError:
             logger.exception("持久化问答运行失败状态时发生异常")
+        _record_analytics("record_failed", tenant_id, trace_id, str(exc))
 
         if is_stream:
             push_to_session(
@@ -369,6 +414,7 @@ async def query(
             "is_stream": request.is_stream,
             "image_refs": user_image_refs,
             "version_scope_id": request.version_scope_id,
+            "reset_version_context": request.reset_version_context,
         },
         max_attempts=runtime_config.max_attempts,
         tenant_id=principal.tenant_id,
@@ -393,6 +439,7 @@ async def query(
             principal.tenant_id,
             user_image_refs,
             request.version_scope_id,
+            request.reset_version_context,
         )
         return {
             "message": "结果正在处理中...",
@@ -409,6 +456,7 @@ async def query(
         principal.tenant_id,
         user_image_refs,
         request.version_scope_id,
+        request.reset_version_context,
     )
     run_record = run_store.get_for_tenant(trace_id, principal.tenant_id)
     if final_state is None or run_record is None or run_record.status == RunStatus.FAILED:
@@ -427,6 +475,7 @@ async def query(
         "requires_human_review": run_record.result.get("requires_human_review", False),
         "review_reason": run_record.result.get("review_reason", ""),
         "version_scope_options": run_record.result.get("version_scope_options", []),
+        "selected_version_context": run_record.result.get("selected_version_context", []),
         "clarified": run_record.result.get("clarified", False),
         "visual": run_record.result.get("visual", {}),
         "image_urls": final_state.get("image_urls") or [],
@@ -479,6 +528,7 @@ async def retry_run(
         principal.tenant_id,
         list(run.input.get("image_refs") or []),
         str(run.input.get("version_scope_id") or ""),
+        bool(run.input.get("reset_version_context", False)),
     )
     return pending.to_public_dict()
 
@@ -500,6 +550,7 @@ async def submit_feedback(
             request.value,
             request.comment or "",
         )
+        get_query_analytics_store().record_feedback(principal.tenant_id, request.trace_id, request.value)
         observe_feedback(request.value)
 
         if matched_count == 0:
@@ -525,6 +576,59 @@ async def submit_feedback(
             f"用户反馈提交失败，trace_id={request.trace_id}，错误={exc}"
         )
         raise HTTPException(status_code=500, detail="用户反馈提交失败") from exc
+
+
+@app.post("/resolution")
+async def submit_resolution(
+    request: ResolutionRequest,
+    principal: Principal = Depends(require_role("query")),
+):
+    """记录用户确认的解决结果；该口径与点赞/点踩相互独立。"""
+    try:
+        run = get_run_store().get_for_tenant(request.trace_id, principal.tenant_id)
+        if run is None or run.kind != "query":
+            raise HTTPException(status_code=404, detail="Query run not found")
+        if run.status != RunStatus.SUCCEEDED:
+            raise HTTPException(status_code=409, detail="只有已经完成的问答可以确认解决结果")
+
+        get_query_analytics_store().record_resolution(
+            principal.tenant_id,
+            request.trace_id,
+            request.status,
+            request.comment or "",
+        )
+        matched_count = update_message_resolution(request.trace_id, request.status, request.comment or "")
+        return {
+            "message": "解决结果已记录",
+            "trace_id": request.trace_id,
+            "status": request.status,
+            "history_updated": matched_count > 0,
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception(f"解决结果提交失败，trace_id={request.trace_id}，错误={exc}")
+        raise HTTPException(status_code=500, detail="解决结果提交失败") from exc
+
+
+@app.get("/analytics/summary")
+async def analytics_summary(
+    days: int = Query(default=7, ge=1, le=365),
+    timezone_offset_minutes: int = Query(default=480, ge=-720, le=840),
+    principal: Principal = Depends(require_role("query")),
+):
+    """返回当前租户的问答运营指标、每日趋势和待关注问题。"""
+    try:
+        return get_query_analytics_store().summary(
+            principal.tenant_id,
+            days,
+            timezone_offset_minutes,
+        )
+    except Exception as exc:
+        logger.exception(f"问答运营统计查询失败，tenant_id={principal.tenant_id}，错误={exc}")
+        raise HTTPException(status_code=503, detail="问答运营统计暂时不可用") from exc
 
 
 @app.get("/stream/{session_id}")
@@ -574,9 +678,12 @@ async def history(
                     "requires_human_review": bool(record.get("requires_human_review")),
                     "review_reason": record.get("review_reason", ""),
                     "version_scope_options": record.get("version_scope_options", []),
+                    "selected_version_context": record.get("selected_version_context", []),
                     "trace_id": record.get("trace_id", ""),
                     "feedback_value": record.get("feedback_value"),
                     "feedback_comment": record.get("feedback_comment", ""),
+                    "resolution_status": record.get("resolution_status"),
+                    "resolution_comment": record.get("resolution_comment", ""),
                     "ts": record.get("ts"),
                 }
             )

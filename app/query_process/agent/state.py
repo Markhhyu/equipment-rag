@@ -22,6 +22,9 @@ class QueryGraphState(TypedDict, total=False):
     # 用户在聊天框上传、仅属于当前会话的图片引用；不会写入Milvus或知识库图片资产集合。
     user_image_refs: List[str]
     selected_version_scope_id: str
+    reset_version_context: bool
+    query_revision_ids: List[str]
+    selected_version_context: List[Dict[str, Any]]
 
     # 设备或商品识别结果。
     item_names: List[str]
