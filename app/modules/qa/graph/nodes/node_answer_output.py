@@ -38,11 +38,32 @@ def _normalize_model_text(content: Any) -> str:
     return str(content or "").strip()
 
 
-def _sanitize_generated_answer(answer: str) -> str:
-    """移除模型越权生成的图片区块和占位链接；真实图片只允许走结构化image_urls。"""
+def _sanitize_generated_answer(answer: str, valid_source_count: int | None = None) -> str:
+    """移除越权图片区块、占位链接和不存在的参考资料编号。"""
     text = _IMAGE_BLOCK_PATTERN.sub("\n", str(answer or ""))
     text = _PLACEHOLDER_URL_PATTERN.sub("", text)
+    if valid_source_count is not None:
+        source_count = max(int(valid_source_count), 0)
+        text = re.sub(
+            r"\[(\d+)\]",
+            lambda match: match.group(0) if 1 <= int(match.group(1)) <= source_count else "",
+            text,
+        )
     return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def _no_evidence_answer(state: QueryGraphState) -> str:
+    """Return a deterministic response instead of asking the model to answer without evidence."""
+    selected = state.get("selected_version_context") or []
+    version_label = ""
+    if selected and isinstance(selected[0], dict):
+        version_label = str(selected[0].get("version_label") or selected[0].get("label") or "").strip()
+    scope = f"所选知识版本 {version_label}" if version_label else "当前设备和版本范围"
+    return (
+        f"当前没有检索到与{scope}匹配的已发布知识资料，因此无法可靠提供处理步骤。"
+        "请检查该版本是否已完成入库，或补充设备手册、故障位置和现场现象后转人工处理。"
+        "为避免误导，系统不会在没有知识证据时生成操作方法。"
+    )
 
 
 def _version_scope_clarification(options: List[Dict[str, Any]]) -> str:
@@ -425,15 +446,23 @@ def node_answer_output(state: QueryGraphState) -> QueryGraphState:
             state["review_reason"] = ""
         elif policy.answer:
             state["answer"] = policy.answer
+        elif not state.get("answer") and not (state.get("reranked_docs") or []):
+            state["answer"] = _no_evidence_answer(state)
+            state["answer_policy"] = "insufficient_evidence"
+            state["requires_human_review"] = True
+            state["review_reason"] = "没有检索到与当前设备版本匹配的已发布知识证据"
         answer_exists = step_1_check_answer(state)
         if not answer_exists:
             prompt = step_2_construct_prompt(state)
             state["prompt"] = prompt
             step_3_generate_response(state, prompt)
 
-        sanitized_answer = _sanitize_generated_answer(str(state.get("answer") or ""))
+        sanitized_answer = _sanitize_generated_answer(
+            str(state.get("answer") or ""),
+            valid_source_count=len(state.get("reranked_docs") or []),
+        )
         if sanitized_answer != str(state.get("answer") or ""):
-            logger.warning("已移除模型生成的越权图片区块或占位链接")
+            logger.warning("已移除模型生成的越权图片区块、占位链接或无效引用")
         state["answer"] = sanitized_answer
         if not state.get("is_stream"):
             set_task_result(session_id, "answer", sanitized_answer)

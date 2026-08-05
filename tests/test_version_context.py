@@ -104,3 +104,19 @@ def test_latest_pinned_context_and_milvus_revision_filter():
     assert 'tenant_id == "tenant-a"' in expression
     assert 'item_name in ["LJ2268"]' in expression
     assert 'revision_id in ["rev-b"]' in expression
+
+
+def test_legacy_knowledge_version_has_an_explicit_display_label():
+    resolved = resolve_version_context(
+        "LJ2268怎么处理卡纸",
+        [
+            {
+                "document_id": "legacy-manual",
+                "revision_id": "legacy-manual-v1",
+                "version_label": "legacy-v1",
+                "item_names": ["LJ2268"],
+            }
+        ],
+    )
+
+    assert resolved["selected_scopes"][0]["label"] == "知识版本 legacy-v1（未限定设备配置）"

@@ -290,6 +290,12 @@ def test_generated_placeholder_image_block_is_removed():
     assert _sanitize_generated_answer(answer) == "请按手册操作。[1]"
 
 
+def test_generated_citations_are_limited_to_real_sources():
+    answer = "有效依据[1]，不存在的依据[2]，也不能引用[99]。"
+    assert _sanitize_generated_answer(answer, valid_source_count=1) == "有效依据[1]，不存在的依据，也不能引用。"
+
+
+
 def test_query_does_not_mix_parallel_software_versions_without_user_selection():
     documents = [
         {"source": "local", "document_id": "manual-a", "software_version": "3.1", "text": "旧版步骤"},

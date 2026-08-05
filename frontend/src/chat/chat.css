@@ -60,6 +60,28 @@
 .message-row.user .message-bubble { border: 0; border-radius: 16px 5px 16px 16px; color: #fff; background: linear-gradient(135deg, #335cff, #506eff); box-shadow: 0 8px 22px rgba(51, 92, 255, .18); }
 .message-bubble.error { border-color: #f5c8ca; background: #fff6f6; color: #a62f34; }
 .message-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.75; }
+.markdown-content { white-space: normal; }
+.markdown-content > :first-child { margin-top: 0; }
+.markdown-content > :last-child { margin-bottom: 0; }
+.markdown-content p { margin: 0 0 10px; }
+.markdown-content strong { color: #17223a; font-weight: 700; }
+.markdown-content h1, .markdown-content h2, .markdown-content h3, .markdown-content h4 {
+  margin: 16px 0 7px; color: #1f2a43; font-size: 14px; line-height: 1.45; letter-spacing: 0;
+}
+.markdown-content h1 { font-size: 17px; }.markdown-content h2 { font-size: 16px; }.markdown-content h3 { font-size: 15px; }
+.markdown-content ul, .markdown-content ol { margin: 7px 0 11px; padding-left: 22px; }
+.markdown-content li { margin: 4px 0; padding-left: 2px; }
+.markdown-content li > p { margin: 0; }
+.markdown-content blockquote { margin: 10px 0; padding: 8px 11px; border-left: 3px solid #9fb0ed; color: #52617c; background: #f5f7fd; }
+.markdown-content blockquote > :last-child { margin-bottom: 0; }
+.markdown-content code { padding: 2px 5px; border-radius: 4px; color: #31467c; font-size: .9em; background: #eef2fa; }
+.markdown-content pre { margin: 10px 0; padding: 11px 12px; overflow-x: auto; border-radius: 7px; background: #20283a; }
+.markdown-content pre code { padding: 0; color: #edf2ff; background: transparent; }
+.markdown-content a { color: #315be8; text-decoration: underline; text-underline-offset: 2px; }
+.markdown-content hr { margin: 13px 0; border: 0; border-top: 1px solid #e0e5ef; }
+.markdown-content table { width: 100%; margin: 10px 0; border-collapse: collapse; font-size: 12px; }
+.markdown-content th, .markdown-content td { padding: 7px 8px; border: 1px solid #dfe5ef; text-align: left; vertical-align: top; }
+.markdown-content th { color: #34415a; background: #f3f5f9; }
 .message-images { margin-bottom: 10px; display: grid; grid-template-columns: repeat(3, minmax(0, 180px)); gap: 8px; }
 .message-images:only-child { margin-bottom: 0; }
 .message-images a { min-width: 0; overflow: hidden; border-radius: 11px; background: #edf0f6; }

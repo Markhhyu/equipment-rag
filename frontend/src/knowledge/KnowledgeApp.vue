@@ -317,16 +317,25 @@ async function openAudit(): Promise<void> {
 async function registerLegacyKnowledge(): Promise<void> {
   try {
     await ElMessageBox.confirm(
-      '系统会扫描当前租户升级前导入的 Milvus 切片，并登记为已生效的 legacy-v1。该操作不会移动或删除原数据。',
-      '登记旧知识库',
-      { confirmButtonText: '开始登记', cancelButtonText: '取消', type: 'info' },
+      '系统会为旧 Milvus 切片补齐强制版本元数据，校验数量一致后登记为 legacy-v1。正文和向量保持不变，Milvus 会重新分配切片主键。',
+      '迁移旧知识库',
+      { confirmButtonText: '开始迁移', cancelButtonText: '取消', type: 'warning' },
     )
   } catch { return }
   registeringLegacy.value = true
   try {
     const response = await apiFetch('/knowledge/legacy/register', apiKey.value, { method: 'POST' })
-    const payload = await response.json() as { discovered: number; registered: number; skipped: number }
-    ElMessage.success(`扫描 ${payload.discovered} 份，新增登记 ${payload.registered} 份，跳过 ${payload.skipped} 份`)
+    const payload = await response.json() as {
+      discovered: number
+      registered: number
+      migrated: number
+      migrated_chunks: number
+      unchanged: number
+      skipped: number
+    }
+    ElMessage.success(
+      `扫描 ${payload.discovered} 份，迁移 ${payload.migrated} 份/${payload.migrated_chunks} 个切片，新增登记 ${payload.registered} 份，已完成 ${payload.unchanged} 份`,
+    )
     await loadDocuments()
   } catch (error) {
     ElMessage.error(`旧知识库登记失败：${errorText(error)}`)
@@ -362,7 +371,7 @@ onMounted(loadDocuments)
       <section class="governance-heading">
         <div><div class="eyebrow">Knowledge Governance</div><h1>文档与版本</h1><p>只有已发布且未停用的版本可以进入问答检索。</p></div>
         <div class="heading-actions">
-          <button class="audit-button" :disabled="registeringLegacy" @click="registerLegacyKnowledge"><el-icon :class="{ 'is-loading': registeringLegacy }"><Refresh /></el-icon>登记旧知识库</button>
+          <button class="audit-button" :disabled="registeringLegacy" @click="registerLegacyKnowledge"><el-icon :class="{ 'is-loading': registeringLegacy }"><Refresh /></el-icon>迁移旧知识库</button>
           <button class="audit-button" @click="openAudit"><el-icon><View /></el-icon>操作审计</button>
           <button class="primary-action" @click="openNewDocument"><el-icon><DocumentAdd /></el-icon>导入新文档</button>
         </div>

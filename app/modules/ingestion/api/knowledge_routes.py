@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import os
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from app.modules.knowledge.application.legacy_migration import migrate_legacy_group, scan_legacy_knowledge
 from app.modules.knowledge.application.registry import get_document_registry
 from app.modules.knowledge.domain.document import DocumentStatus, legacy_document_identity
 from app.platform.config.milvus_config import milvus_config
 from app.platform.security.auth import Principal, require_role
-from app.platform.security.tenancy import tenant_filter
 from app.platform.vector_store.milvus import get_milvus_client
 
 
@@ -38,53 +37,61 @@ async def list_knowledge_documents(
     )
 
 
-def _scan_legacy_knowledge(tenant_id: str) -> dict[str, dict[str, Any]]:
-    """扫描尚未携带治理标记的旧Milvus切片，并按源文件聚合。"""
+def _legacy_migration_context(tenant_id: str):
+    """连接Milvus并返回旧知识迁移所需上下文。"""
     client = get_milvus_client()
     collection_name = milvus_config.chunks_collection
     if client is None or not collection_name:
         raise RuntimeError("Milvus未配置或当前不可连接")
     if not client.has_collection(collection_name=collection_name):
-        return {}
-
-    groups: dict[str, dict[str, Any]] = {}
-    iterator = client.query_iterator(
-        collection_name=collection_name,
-        filter=tenant_filter(tenant_id),
-        output_fields=["file_title", "parent_title", "item_name", "governance_managed"],
-        batch_size=500,
-    )
-    try:
-        while batch := iterator.next():
-            for chunk in batch:
-                if chunk.get("governance_managed"):
-                    continue
-                file_title = str(chunk.get("file_title") or chunk.get("parent_title") or "").strip()
-                if not file_title:
-                    continue
-                group = groups.setdefault(file_title, {"chunk_count": 0, "item_names": set()})
-                group["chunk_count"] += 1
-                item_name = str(chunk.get("item_name") or "").strip()
-                if item_name:
-                    group["item_names"].add(item_name)
-    finally:
-        iterator.close()
-    return groups
+        return client, collection_name, {}
+    return client, collection_name, scan_legacy_knowledge(client, collection_name, tenant_id)
 
 
 @router.post("/knowledge/legacy/register")
 async def register_legacy_knowledge(
     principal: Principal = Depends(require_role("admin")),
 ):
-    """把升级前的旧Milvus文档登记为legacy-v1，使其可以停用和审计。"""
+    """补齐旧切片版本元数据，校验成功后登记并发布legacy-v1。"""
     try:
-        groups = _scan_legacy_knowledge(principal.tenant_id)
+        client, collection_name, groups = _legacy_migration_context(principal.tenant_id)
         registry = get_document_registry()
         registered = 0
+        migrated = 0
+        migrated_chunks = 0
+        rekeyed_chunks = 0
+        unchanged = 0
         skipped = 0
         for file_title, summary in groups.items():
             document_id, revision_id = legacy_document_identity(principal.tenant_id, file_title)
-            if registry.get_document(principal.tenant_id, document_id) is not None:
+            migration = migrate_legacy_group(
+                client,
+                collection_name,
+                principal.tenant_id,
+                file_title,
+                summary,
+            )
+            if migration["migrated_count"]:
+                migrated += 1
+                migrated_chunks += migration["migrated_count"]
+                rekeyed_chunks += migration["rekeyed_count"]
+            else:
+                unchanged += 1
+
+            existing = registry.get_document(principal.tenant_id, document_id)
+            if existing is not None:
+                versions = {
+                    str(version.get("revision_id") or ""): version
+                    for version in existing.get("versions") or []
+                }
+                version = versions.get(revision_id)
+                if version is None:
+                    raise RuntimeError(f"文档{document_id}已存在但缺少版本{revision_id}")
+                if int(version.get("chunk_count") or 0) != int(summary["chunk_count"]):
+                    raise RuntimeError(
+                        f"版本{revision_id}登记数量与Milvus不一致："
+                        f"登记{int(version.get('chunk_count') or 0)}条，实际{int(summary['chunk_count'])}条"
+                    )
                 skipped += 1
                 continue
             registry.register_import(
@@ -100,9 +107,9 @@ async def register_legacy_knowledge(
             registry.mark_import_succeeded(
                 principal.tenant_id,
                 revision_id,
-                chunk_count=int(summary["chunk_count"]),
+                chunk_count=int(migration["chunk_count"]),
                 image_count=0,
-                item_names=sorted(summary["item_names"]),
+                item_names=list(summary["item_names"]),
                 actor=principal.key_id,
             )
             registry.publish_version(
@@ -114,9 +121,13 @@ async def register_legacy_knowledge(
             )
             registered += 1
         return {
-            "message": "旧知识库登记完成",
+            "message": "旧知识库版本迁移和登记完成",
             "discovered": len(groups),
             "registered": registered,
+            "migrated": migrated,
+            "migrated_chunks": migrated_chunks,
+            "rekeyed_chunks": rekeyed_chunks,
+            "unchanged": unchanged,
             "skipped": skipped,
         }
     except (RuntimeError, ValueError) as exc:

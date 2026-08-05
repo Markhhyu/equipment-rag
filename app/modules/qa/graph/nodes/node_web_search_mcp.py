@@ -57,10 +57,11 @@ async def mcp_call(query):
     :return: MCP返回的原始结果对象 (包含 content, isError 等字段)
     """
 
-    # 新开通的百炼服务使用 Streamable HTTP；保留 SSE 是为了兼容旧端点。
-    search_mcp = _create_mcp_server()
+    search_mcp = None
 
     try:
+        # 新开通的百炼服务使用 Streamable HTTP；保留 SSE 是为了兼容旧端点。
+        search_mcp = _create_mcp_server()
         logger.info(f"[MCP] 正在连接百炼 WebSearch 服务: {mcp_config.mcp_base_url}")
         # 建立与MCP服务的SSE连接（异步方法，需await）
         await search_mcp.connect()
@@ -75,15 +76,24 @@ async def mcp_call(query):
         logger.info("[MCP] 工具调用完成，已获取返回结果")
         return result
 
-    except Exception:
-
-        logger.exception("[MCP] 调用过程中发生异常")
-
+    except Exception as exc:
+        error = str(exc)
+        if "401" in error or "Unauthorized" in error:
+            logger.warning("[MCP] WebSearch鉴权失败，请检查MCP_DASHSCOPE_API_KEY；本轮仅使用本地知识库")
+        else:
+            logger.error(f"[MCP] 调用失败，本轮仅使用本地知识库：{error}")
         return None
 
     finally:
-        # 无论调用成功/失败，最终都关闭MCP连接（释放资源，异步方法）
-        await search_mcp.cleanup()
+        if search_mcp is not None:
+            try:
+                await search_mcp.cleanup()
+            except Exception as exc:
+                error = str(exc)
+                if "401" in error or "Unauthorized" in error:
+                    logger.warning("[MCP] WebSearch连接清理时确认鉴权失败，本轮已降级为本地检索")
+                else:
+                    logger.warning(f"[MCP] WebSearch连接清理失败：{error}")
 
 
 def node_web_search_mcp(state):

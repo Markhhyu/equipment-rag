@@ -26,6 +26,7 @@ _MODEL_TOKEN_PATTERN = re.compile(
     r"(?<![A-Za-z0-9])([A-Za-z]{1,12}(?:[\s._-]*\d[A-Za-z0-9._-]*))(?![A-Za-z0-9])",
     re.IGNORECASE,
 )
+_VERSION_ONLY_TOKEN_PATTERN = re.compile(r"^(?:v|ver|version)\d+(?:[._-]\d+)*$", re.IGNORECASE)
 
 # 只有非常明确、且本身不包含新问题内容的肯定回复才会触发“确认上轮单个候选”。
 # 例如“是的”“就是这个”可以确认；“是的，但是我问的是PT770”不会被本规则截断，
@@ -65,6 +66,8 @@ def _extract_model_tokens(value: str) -> List[str]:
     tokens: List[str] = []
     for match in _MODEL_TOKEN_PATTERN.finditer(str(value or "")):
         normalized = re.sub(r"[^A-Za-z0-9]+", "", match.group(1)).upper()
+        if _VERSION_ONLY_TOKEN_PATTERN.fullmatch(match.group(1).strip()):
+            continue
         if normalized and normalized not in tokens:
             tokens.append(normalized)
     return tokens
@@ -76,7 +79,11 @@ def _extract_explicit_item_names(query: str) -> List[str]:
 
     返回原始可读形式是为了让向量检索仍能使用用户输入；真正比较时会再标准化。
     """
-    names = [re.sub(r"\s+", " ", match.group(1)).strip() for match in _MODEL_TOKEN_PATTERN.finditer(query or "")]
+    names = [
+        value
+        for match in _MODEL_TOKEN_PATTERN.finditer(query or "")
+        if not _VERSION_ONLY_TOKEN_PATTERN.fullmatch((value := re.sub(r"\s+", " ", match.group(1)).strip()))
+    ]
     return _unique_strings(names)
 
 

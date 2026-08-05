@@ -23,6 +23,8 @@ import {
   Warning,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import DOMPurify from 'dompurify'
+import { marked } from 'marked'
 import ApiKeyDialog from '../shared/ApiKeyDialog.vue'
 import { apiFetch, consumeSse, type SseMessage } from '../shared/api'
 import { formatBytes, formatNodeName, formatTime } from '../shared/format'
@@ -117,6 +119,25 @@ interface AttachmentConfig {
 
 interface AttachmentUploadResponse {
   attachments: Array<{ object_ref: string; preview_url: string }>
+}
+
+marked.setOptions({
+  breaks: true,
+  gfm: true,
+})
+
+const markdownTags = [
+  'p', 'br', 'strong', 'em', 'del', 'blockquote', 'ul', 'ol', 'li',
+  'h1', 'h2', 'h3', 'h4', 'code', 'pre', 'a', 'hr', 'table', 'thead',
+  'tbody', 'tr', 'th', 'td',
+]
+
+function renderAssistantMarkdown(value: string): string {
+  const html = marked.parse(String(value || ''), { async: false }) as string
+  return DOMPurify.sanitize(html, {
+    ALLOWED_TAGS: markdownTags,
+    ALLOWED_ATTR: ['href', 'title'],
+  })
 }
 
 interface HistoryResponse {
@@ -557,7 +578,12 @@ onBeforeUnmount(() => {
                     <img :src="url" alt="会话图片" />
                   </a>
                 </div>
-                <div v-if="message.text" class="message-text">{{ message.text }}</div>
+                <div
+                  v-if="message.text && message.role === 'assistant'"
+                  class="message-text markdown-content"
+                  v-html="renderAssistantMarkdown(message.text)"
+                />
+                <div v-else-if="message.text" class="message-text">{{ message.text }}</div>
                 <div v-if="message.status === 'streaming' && !message.text" class="thinking-line">
                   <i /><i /><i /><span>正在检索并组织回答</span>
                 </div>

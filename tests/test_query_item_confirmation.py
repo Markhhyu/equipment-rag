@@ -27,6 +27,12 @@ def test_explicit_model_extraction_uses_current_question():
     ) == ["LJ2268", "LJ2268W"]
 
 
+def test_knowledge_version_token_is_not_treated_as_device_model():
+    assert node_item_name_confirm._extract_explicit_item_names(
+        "LJ2268 打印机 legacy-v1 知识版本中，卡纸后应该怎么处理？"
+    ) == ["LJ2268"]
+
+
 def test_lj2268_low_vector_score_is_confirmed_by_model_token():
     """型号token一致时，向量绝对分数偏低也能映射到知识库标准名称。"""
     result = node_item_name_confirm.step_5_align_item_names(
@@ -233,6 +239,36 @@ def test_answer_node_no_longer_sends_final_before_node_completion(monkeypatch):
     )
 
     assert events == [(SSEEvent.DELTA, {"delta": "已找到答案"})]
+
+
+def test_answer_node_does_not_call_model_without_evidence(monkeypatch):
+    saved = []
+    monkeypatch.setattr(node_answer_output, "resolve_object_urls", lambda values: values)
+    monkeypatch.setattr(node_answer_output, "step_4_write_history", lambda state, _refs: saved.append(dict(state)))
+    monkeypatch.setattr(node_answer_output, "set_task_result", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(node_answer_output, "add_running_task", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(node_answer_output, "add_done_task", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        node_answer_output,
+        "step_3_generate_response",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("零证据时不应调用模型")),
+    )
+
+    result = node_answer_output.node_answer_output(
+        {
+            "session_id": "session",
+            "original_query": "LJ2268卡纸后怎么处理？",
+            "item_names": ["LJ2268/LJ2268W激光打印机"],
+            "reranked_docs": [],
+            "is_stream": False,
+        }
+    )
+
+    assert result["answer_policy"] == "insufficient_evidence"
+    assert result["requires_human_review"] is True
+    assert "不会在没有知识证据时生成操作方法" in result["answer"]
+    assert "[1]" not in result["answer"]
+    assert saved
 
 
 class _FakeCursor:

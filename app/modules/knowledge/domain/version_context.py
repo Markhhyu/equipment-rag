@@ -51,12 +51,16 @@ def _normalize(value: str) -> str:
 
 def _choice(version: dict[str, Any], varying_indexes: set[int]) -> dict[str, Any]:
     profile = version_profile(version)
+    applicability_label = version_label(profile, varying_indexes)
+    knowledge_version = str(version.get("version_label") or "").strip()
+    if knowledge_version and applicability_label == "通用版本（未限定设备配置）":
+        applicability_label = f"知识版本 {knowledge_version}（未限定设备配置）"
     return {
         "document_id": str(version.get("document_id") or ""),
         "revision_id": str(version.get("revision_id") or ""),
         "scope_id": version_scope_id(profile),
-        "label": version_label(profile, varying_indexes),
-        "version_label": str(version.get("version_label") or ""),
+        "label": applicability_label,
+        "version_label": knowledge_version,
         "item_names": [str(value) for value in version.get("item_names") or [] if str(value).strip()],
         **{field: value for field, value in zip(VERSION_FIELDS, profile)},
     }
