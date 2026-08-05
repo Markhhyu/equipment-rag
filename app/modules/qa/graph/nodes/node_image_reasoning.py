@@ -16,6 +16,7 @@ from app.platform.config.image_processing_config import image_processing_config
 from app.platform.config.lm_config import lm_config
 from app.platform.observability.logging import logger
 from app.platform.ai.chat import get_llm_client
+from app.platform.ai.prompts import load_prompt
 from app.platform.observability.rag_observability import start_rag_observation, summarize_image_assets
 from app.platform.storage.minio import download_minio_object
 from app.modules.qa.graph.state import QueryGraphState
@@ -274,13 +275,7 @@ def _invoke_query_vision(question: str, assets: List[Dict[str, Any]]) -> Tuple[s
     content: List[Dict[str, Any]] = [
         {
             "type": "text",
-            "text": (
-                "你正在根据设备技术手册图片或用户在当前会话上传的设备图片回答一个具体问题。\n"
-                f"用户问题：{question}\n\n"
-                "请只依据随后提供的图片和每张图片的已缓存说明作答。重点确认界面文字、按钮或接口位置、"
-                "接线关系、指示灯状态、图形走势和部件方向。无法从图片确认的内容必须明确说明无法确认，"
-                "不要根据常识补造。回答控制在500字以内，并使用“图片1”“第X页”等标识说明依据。"
-            ),
+            "text": load_prompt("query_image_reasoning", question=question),
         }
     ]
     temp_paths: List[str] = []

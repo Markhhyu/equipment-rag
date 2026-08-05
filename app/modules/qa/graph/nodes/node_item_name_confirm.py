@@ -243,7 +243,7 @@ def step_3_extract_info(query: str, history: List[Dict]) -> Dict:
         return {"item_names": [], "rewritten_query": query}
 
     messages = [
-        SystemMessage(content="你是一个专业的客服助手，擅长理解用户意图和提取关键信息。"),
+        SystemMessage(content=load_prompt("query_rewrite_system")),
         HumanMessage(content=prompt)
     ]
 

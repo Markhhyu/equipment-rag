@@ -19,6 +19,7 @@ from app.platform.config.image_processing_config import image_processing_config
 from app.platform.storage.minio import download_minio_object
 from app.platform.observability.logging import logger
 from app.platform.ai.chat import get_llm_client
+from app.platform.ai.prompts import load_prompt
 from app.platform.observability.langfuse_monitor import trace_image_enrichment
 from app.platform.observability.rag_observability import start_rag_observation, summarize_image_assets
 
@@ -57,24 +58,14 @@ def _build_image_prompt(asset: dict) -> str:
     context_before = str(asset.get("context_before") or "")
     context_after = str(asset.get("context_after") or "")
 
-    return f"""
-你正在分析设备技术手册《{document_name}》中的一张图片，位置为{page_text}。
-请生成一段准确、可检索的中文图片说明，控制在150字以内。
-
-重点提取：
-1. 图片属于设备外观、操作界面、设备面板、网络拓扑、接线图、流程图、参数曲线或其他哪种类型；
-2. 图片中明确可见的按钮、菜单、字段、接口、端口、设备名称、告警文字、参数值和连接方向；
-3. 对设备操作、维护、故障处理或系统配置有直接帮助的信息。
-
-已有基础描述：{base_description}
-图片上文：{context_before}
-图片下文：{context_after}
-
-要求：
-- 只描述图片中能够确认的内容，不要根据上下文猜测；
-- 不要输出“这是一张图片”等无信息内容；
-- 不要使用Markdown，不要换行，不要添加分析过程。
-""".strip()
+    return load_prompt(
+        "image_enrichment",
+        document_name=document_name,
+        page_text=page_text,
+        base_description=base_description,
+        context_before=context_before,
+        context_after=context_after,
+    ).strip()
 
 
 def _extract_response_text(content) -> str:

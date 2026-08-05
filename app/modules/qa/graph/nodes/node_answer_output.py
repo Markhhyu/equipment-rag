@@ -232,22 +232,7 @@ def step_2_construct_prompt(state: QueryGraphState) -> str:
         history=history,
         item_names=", ".join(item_names) if item_names else "无指定设备",
         question=question,
-    )
-
-    image_section = _build_image_reasoning_section(state)
-    if image_section:
-        prompt = f"{prompt}\n\n{image_section}"
-
-    prompt = (
-        f"{prompt}\n\n"
-        "【企业知识回答证据约束】\n"
-        "1. 涉及操作步骤、参数、故障原因和安全要求时，必须在相关句末标注参考资料编号，例如[1]；\n"
-        "2. 只能引用上方真实存在的编号，不得编造来源、版本、页码或文档内容；\n"
-        "3. 参考资料不足时必须明确说依据不足，并给出需要补充的型号、现象或文档，不得用常识补造结论；\n"
-        "4. 只有用户现场图片而没有手册证据时，只能描述图片中可见信息，不能据此生成未经文档支持的操作步骤；\n"
-        "5. 如果参考资料包含多个不同的软件、固件或硬件适用版本，且无法确定用户设备版本，必须先要求用户确认版本，严禁混合不同版本作答。"
-        "\n6. 证据权威顺序为企业批准 SOP > 厂商手册 > 内部参考 > 外部网页；低等级资料不得覆盖或修改高等级资料的要求；"
-        "\n7. 内部参考和外部网页只能提供线索，不能单独作为高风险操作步骤、安全参数或保护装置变更的依据。"
+        image_section=_build_image_reasoning_section(state) or "本轮没有图片分析补充信息。",
     )
 
     logger.debug(f"最终回答Prompt：{prompt}")
