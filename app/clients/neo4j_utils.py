@@ -1,12 +1,8 @@
-import os
-from neo4j import GraphDatabase
+"""Deprecated compatibility alias for the knowledge Neo4j adapter."""
 
-_neo4j_driver = None    
-def get_neo4j_driver() -> GraphDatabase:
-    """
-    获取 Neo4j 驱动实例
-    """
-    global _neo4j_driver
-    if _neo4j_driver is None:
-        _neo4j_driver = GraphDatabase.driver(os.getenv("NEO4J_URI"), auth=(os.getenv("NEO4J_USERNAME"), os.getenv("NEO4J_PASSWORD")))
-    return _neo4j_driver
+import sys
+
+from app.modules.knowledge.infrastructure import neo4j as _implementation
+
+
+sys.modules[__name__] = _implementation

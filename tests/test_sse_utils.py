@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from app.utils.sse_utils import (
+from app.platform.runtime.sse import (
     SSEEvent,
     _sse_pack,
     create_sse_queue,

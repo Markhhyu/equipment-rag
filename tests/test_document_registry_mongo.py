@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from app.clients.document_registry_utils import MongoDocumentRegistry
+from app.modules.knowledge.infrastructure.document_registry import MongoDocumentRegistry
 
 
 pytestmark = [

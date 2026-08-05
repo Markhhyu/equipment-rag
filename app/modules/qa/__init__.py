@@ -1,0 +1,1 @@
+"""Equipment question-answering module."""

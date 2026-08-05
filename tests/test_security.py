@@ -4,9 +4,9 @@ import warnings
 import pytest
 from fastapi import FastAPI, HTTPException
 
-from app.security.auth import Principal, authenticate, require_role
-from app.security.config import load_security_config, reset_security_config_for_tests
-from app.security.http import configure_http_security
+from app.platform.security.auth import Principal, authenticate, require_role
+from app.platform.security.config import load_security_config, reset_security_config_for_tests
+from app.platform.security.http import configure_http_security
 
 
 @pytest.fixture(autouse=True)

@@ -1,8 +1,8 @@
 import hashlib
 import hmac
 
-from app.workflow.models import DeliveryStatus
-from app.workflow.store import InMemoryWorkflowStore, _event_payload
+from app.modules.workflow.domain.models import DeliveryStatus
+from app.modules.workflow.infrastructure.store import InMemoryWorkflowStore, _event_payload
 
 
 def test_workflow_case_is_idempotent_and_enforces_state_transitions():

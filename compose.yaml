@@ -165,7 +165,7 @@ services:
   # 文档导入 API：负责解析文件、生成向量并写入知识库。
   import-api:
     <<: *app-service
-    command: ["uvicorn", "app.import_process.api.file_import_service:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: ["uvicorn", "app.apps.import_api:app", "--host", "0.0.0.0", "--port", "8000"]
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${IMPORT_API_PORT:-8000}:8000"
     healthcheck:
@@ -178,7 +178,7 @@ services:
   # 查询 API：负责运行 RAG Agent 并提供聊天接口。
   query-api:
     <<: *app-service
-    command: ["uvicorn", "app.query_process.api.query_service:app", "--host", "0.0.0.0", "--port", "8001"]
+    command: ["uvicorn", "app.apps.query_api:app", "--host", "0.0.0.0", "--port", "8001"]
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${QUERY_API_PORT:-8001}:8001"
     healthcheck:
@@ -191,7 +191,7 @@ services:
   # 人工复核工作流 API：仅提供厂商无关协议，企微、钉钉、飞书和 OA 由外部连接器对接。
   workflow-api:
     <<: *app-service
-    command: ["uvicorn", "app.workflow.api.workflow_service:app", "--host", "0.0.0.0", "--port", "8002"]
+    command: ["uvicorn", "app.apps.workflow_api:app", "--host", "0.0.0.0", "--port", "8002"]
     depends_on:
       mongo:
         condition: service_healthy

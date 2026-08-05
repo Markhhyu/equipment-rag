@@ -1,10 +1,10 @@
 from bson import ObjectId
 from pymongo import DESCENDING
 
-from app.clients import mongo_history_utils
-from app.conf.rag_tuning_config import load_rag_tuning_config
-from app.query_process.agent.nodes import node_answer_output, node_item_name_confirm
-from app.utils.sse_utils import SSEEvent
+from app.platform.config.rag_tuning_config import load_rag_tuning_config
+from app.modules.qa.graph.nodes import node_answer_output, node_item_name_confirm
+from app.modules.qa.infrastructure import history as mongo_history_utils
+from app.platform.runtime.sse import SSEEvent
 
 
 def test_item_name_threshold_configuration_is_bounded(monkeypatch):

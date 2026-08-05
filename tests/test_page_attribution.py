@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from app.import_process.page_attribution import attach_pdf_page_numbers, load_mineru_pages
+from app.modules.ingestion.page_attribution import attach_pdf_page_numbers, load_mineru_pages
 
 
 def test_content_list_page_idx_is_converted_to_physical_pdf_page(tmp_path):

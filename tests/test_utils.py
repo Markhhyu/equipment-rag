@@ -3,9 +3,9 @@ import json
 import numpy as np
 import pytest
 
-from app.utils.escape_milvus_string_utils import escape_milvus_string
-from app.utils.format_utils import format_json, format_state
-from app.utils.normalize_sparse_vector import normalize_sparse_vector
+from app.modules.ingestion.graph.formatting import format_json, format_state
+from app.platform.vector_store.expressions import escape_milvus_string
+from app.platform.vector_store.sparse import normalize_sparse_vector
 
 
 @pytest.mark.parametrize(

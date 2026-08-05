@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from app.utils.path_util import PROJECT_ROOT, get_project_root
+from app.shared.paths import PROJECT_ROOT, get_project_root
 
 
 def test_project_root_uses_repository_marker_without_dotenv():

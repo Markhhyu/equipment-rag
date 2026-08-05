@@ -1,1 +1,3 @@
-"""认证、租户隔离和 HTTP 安全加固工具。"""
+"""Deprecated security imports; use :mod:`app.platform.security`."""
+
+from app.platform.security import *

@@ -1,4 +1,4 @@
-from app.import_process.agent.state import create_default_state, get_default_state
+from app.modules.ingestion.graph.state import create_default_state, get_default_state
 
 
 def test_default_import_state_is_isolated():

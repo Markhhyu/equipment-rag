@@ -1,5 +1,5 @@
-from app.query_process.agent.nodes import node_rerank
-from app.query_process.agent.state import QueryGraphState
+from app.modules.qa.graph.nodes import node_rerank
+from app.modules.qa.graph.state import QueryGraphState
 
 
 def _scored_doc(chunk_id: str, score: float, *, has_images: bool = False):

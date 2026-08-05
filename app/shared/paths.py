@@ -1,0 +1,38 @@
+"""Repository path discovery shared by runtime modules and scripts."""
+from pathlib import Path
+from dotenv import load_dotenv
+import os
+
+def get_path_dir(ps:int = 0)->Path:
+    """
+    pathlib.Path 提供了 parents 属性，这是一个有序的路径上级目录迭代器，直接通过索引取值就能快速获取「上 N 级目录」，完美解决多层 .parent 繁琐的问题，这也是官方推荐的简化写法！
+    核心规则：parents[N] 索引对应「向上的层级数」
+    parents[0] → 等价于 .parent（当前路径的上 1 级目录）
+    parents[1] → 等价于 .parent.parent（当前路径的上 2 级目录）
+    parents[2] → 等价于 .parent.parent.parent（当前路径的上 3 级目录）
+    以此类推，parents[N] → 直接获取上 N+1 级目录，索引越⼤，层级越靠上
+    :param ps:
+    :return:
+    """
+    dir_path = Path(__file__).parents[ps]
+    return dir_path
+
+
+def get_project_root(identifier: str = "pyproject.toml") -> Path:
+    # 第一步：优先读取环境变量（生产环境用）
+    env_root = os.getenv("PROJECT_ROOT")
+    if env_root and Path(env_root).absolute().exists():
+        return Path(env_root).absolute()
+
+    # 第二步：递归查找稳定存在于仓库中的项目标识。
+    current_dir = Path(__file__).absolute().parent
+    while current_dir != current_dir.parent:
+        if (current_dir / identifier).exists():
+            load_dotenv(dotenv_path=current_dir / ".env")
+            return current_dir
+        current_dir = current_dir.parent
+
+    raise FileNotFoundError(f"未找到项目根目录标识「{identifier}」，且环境变量PROJECT_ROOT未配置")
+
+
+PROJECT_ROOT = get_project_root()

@@ -5,7 +5,7 @@ import uuid
 
 import pytest
 
-from app.workflow.store import MongoWorkflowStore
+from app.modules.workflow.infrastructure.store import MongoWorkflowStore
 
 
 pytestmark = [

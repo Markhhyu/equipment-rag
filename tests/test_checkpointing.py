@@ -3,7 +3,7 @@ from typing_extensions import TypedDict
 import pytest
 from langgraph.graph import END, START, StateGraph
 
-from app.runtime.checkpointing import (
+from app.platform.runtime.checkpointing import (
     checkpoint_config,
     get_checkpointer,
     reset_checkpointer_for_tests,

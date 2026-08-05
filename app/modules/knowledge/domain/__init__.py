@@ -1,0 +1,1 @@
+"""Knowledge governance domain rules."""

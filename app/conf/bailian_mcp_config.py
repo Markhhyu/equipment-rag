@@ -1,35 +1,8 @@
-import os
-from dataclasses import dataclass
+"""Deprecated compatibility alias for app.platform.config.bailian_mcp_config."""
 
-from dotenv import load_dotenv
+import sys
 
-# 必须先加载项目根目录的 .env，后面的配置对象才能读取到用户填写的值。
-load_dotenv()
+from app.platform.config import bailian_mcp_config as _implementation
 
 
-@dataclass(frozen=True)
-class McpConfig:
-    """百炼 WebSearch MCP 连接配置。"""
-
-    mcp_base_url: str
-    api_key: str
-    transport: str
-    tool_name: str
-    timeout_seconds: float
-
-
-
-mcp_config = McpConfig(
-    # 当前百炼官方端点以 /mcp 结尾，使用 Streamable HTTP 协议。
-    mcp_base_url=os.getenv("MCP_DASHSCOPE_BASE_URL") or "",
-    # 新配置使用独立百炼 Key；旧项目未配置时仍回退到 OPENAI_API_KEY。
-    api_key=(os.getenv("MCP_DASHSCOPE_API_KEY") or "").strip(),
-    # sse 只用于仍提供旧版 /sse 地址的私有或历史服务。
-    transport=(os.getenv("MCP_DASHSCOPE_TRANSPORT") or "streamable_http").strip().lower(),
-    # 不同 MCP 服务暴露的工具名可能不同，百炼联网搜索默认为 bailian_web_search。
-    tool_name=os.getenv("MCP_DASHSCOPE_TOOL_NAME") or "bailian_web_search",
-    timeout_seconds=float(os.getenv("MCP_DASHSCOPE_TIMEOUT_SECONDS") or "60"),
-)
-
-client_session_timeout_seconds = mcp_config.timeout_seconds,
-
+sys.modules[__name__] = _implementation

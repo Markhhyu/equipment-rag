@@ -31,6 +31,7 @@
 
 | 文档 | 适合什么时候看 |
 |---|---|
+| [后端模块边界](docs/backend-architecture.md) | 需要理解服务入口、业务模块和基础设施依赖方向时 |
 | [配置与密钥指南](docs/configuration.md) | 不清楚 API Key、连接地址或密码从哪里获取时 |
 | [可观测、评测与调优指南](docs/observability.md) | 需要分析 Trace、指标或调整 RAG 参数时 |
 | [运行恢复说明](docs/durable-runtime.md) | 需要理解任务状态、Checkpoint 和失败重试时 |
@@ -606,8 +607,9 @@ uv sync --frozen --group dev
 直接在宿主机运行 API 前，需要把 `.env` 中 MongoDB、MinIO、Milvus、MinerU 地址从 Docker 服务名改为 `127.0.0.1`。
 
 ```powershell
-uv run uvicorn app.import_process.api.file_import_service:app --host 127.0.0.1 --port 8000
-uv run uvicorn app.query_process.api.query_service:app --host 127.0.0.1 --port 8001
+uv run uvicorn app.apps.import_api:app --host 127.0.0.1 --port 8000
+uv run uvicorn app.apps.query_api:app --host 127.0.0.1 --port 8001
+uv run uvicorn app.apps.workflow_api:app --host 127.0.0.1 --port 8002
 ```
 
 修改 Vue 页面时，先安装依赖并启动 Vite：
@@ -649,17 +651,13 @@ docker compose config --quiet
 ```text
 equipment-rag-agent/
 ├─ app/
-│  ├─ clients/                 # MongoDB、Milvus、MinIO、MinerU、Neo4j 客户端
-│  ├─ conf/                    # 模型、检索、图片和服务配置
-│  ├─ import_process/          # 文档导入 API、页面和 LangGraph
-│  ├─ query_process/           # 问答 API、页面和 LangGraph
-│  ├─ workflow/                # 独立人工复核 API、事件投递协议和连接器边界
-│  ├─ model/reranker/          # BGE / Qwen Reranker Provider
-│  ├─ observability/           # Langfuse、Prometheus、质量指标
-│  ├─ runtime/                 # 运行注册表、租约和 Checkpoint
-│  ├─ security/                # API Key、角色、租户隔离
+│  ├─ apps/                    # import/query/workflow 三个服务入口
+│  ├─ modules/                 # analytics、ingestion、knowledge、qa、workflow 业务模块
+│  ├─ platform/                # 配置、安全、运行时、观测、AI 和存储基础能力
+│  ├─ shared/                  # 少量无业务归属的共享代码
+│  ├─ workers/                 # 后台任务入口
 │  ├─ evaluation/              # 离线回放和真实 API 评测
-│  └─ utils/                   # SSE、任务状态和通用工具
+│  └─ import_process/ 等       # 迁移期兼容入口，不再放置新实现
 ├─ deploy/
 │  ├─ langfuse/                # Langfuse 自部署 Compose
 │  ├─ attu/                    # Milvus 管理页面
@@ -677,6 +675,8 @@ equipment-rag-agent/
 ├─ pyproject.toml              # 依赖和工具配置
 └─ uv.lock                     # 锁定依赖版本
 ```
+
+更详细的模块职责、依赖方向和兼容路径见 `docs/backend-architecture.md`。
 
 ---
 

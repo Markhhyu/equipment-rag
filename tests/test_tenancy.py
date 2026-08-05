@@ -1,14 +1,14 @@
 import pytest
 
-from app.clients import minio_utils
-from app.security.config import reset_security_config_for_tests
-from app.security.tenancy import (
+from app.platform.security.config import reset_security_config_for_tests
+from app.platform.security.tenancy import (
     public_session_id,
     safe_upload_filename,
     scoped_session_id,
     tenant_filter,
     tenant_object_prefix,
 )
+from app.platform.storage import minio as minio_utils
 
 
 def test_session_keys_are_scoped_and_reversible_for_the_same_tenant():

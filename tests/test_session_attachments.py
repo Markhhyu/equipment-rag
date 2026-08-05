@@ -3,9 +3,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.clients import session_attachment_utils
-from app.query_process.agent.nodes import node_answer_output, node_image_reasoning
-from app.query_process.agent.state import QueryGraphState
+from app.modules.qa.graph.nodes import node_answer_output, node_image_reasoning
+from app.modules.qa.graph.state import QueryGraphState
+from app.modules.qa.infrastructure import attachments as session_attachment_utils
 
 
 def _png_stream(payload_size: int = 64) -> BytesIO:

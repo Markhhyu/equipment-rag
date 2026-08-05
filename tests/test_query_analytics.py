@@ -1,6 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
-from app.query_process.analytics import InMemoryQueryAnalyticsStore
+from app.modules.analytics.infrastructure.store import InMemoryQueryAnalyticsStore
 
 
 def test_query_analytics_separates_technical_and_business_outcomes():

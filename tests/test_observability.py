@@ -1,10 +1,15 @@
 import json
 import re
 
-import app.observability.quality_metrics as quality_metrics
-from app.observability.langfuse_monitor import create_query_trace_id, rag_tuning_metadata
-from app.observability.rag_observability import observed_graph_node
-from app.observability.quality_metrics import analyze_chunks, analyze_import_state, analyze_query_state, stage_metrics
+import app.platform.observability.quality_metrics as quality_metrics
+from app.platform.observability.langfuse_monitor import create_query_trace_id, rag_tuning_metadata
+from app.platform.observability.quality_metrics import (
+    analyze_chunks,
+    analyze_import_state,
+    analyze_query_state,
+    stage_metrics,
+)
+from app.platform.observability.rag_observability import observed_graph_node
 
 
 def test_import_quality_report_covers_parser_chunks_vectors_and_storage(monkeypatch):

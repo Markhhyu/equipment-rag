@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 from agents.mcp import MCPServerSse, MCPServerStreamableHttp
 
-from app.query_process.agent.nodes import node_web_search_mcp
+from app.modules.qa.graph.nodes import node_web_search_mcp
 
 
 def _config(**overrides):

@@ -5,17 +5,12 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from app.clients.document_registry_utils import (
-    InMemoryDocumentRegistry,
-    build_applicability_profile,
-    filter_queryable_hits,
-    legacy_document_identity,
-    reset_document_registry_for_tests,
-)
-from app.query_process.agent.nodes.node_answer_output import build_answer_sources
-from app.query_process.agent.nodes.node_answer_output import _sanitize_generated_answer
-from app.knowledge_trust import assess_answer_policy, normalize_trust_level
-from app.query_process.agent.nodes.node_rerank import resolve_version_scope, step_1_merge_docs, step_3_topk
+from app.modules.knowledge.application.registry import filter_queryable_hits, reset_document_registry_for_tests
+from app.modules.knowledge.domain.document import build_applicability_profile, legacy_document_identity
+from app.modules.knowledge.infrastructure.document_registry import InMemoryDocumentRegistry
+from app.modules.qa.graph.nodes.node_answer_output import _sanitize_generated_answer, build_answer_sources
+from app.modules.knowledge.domain.trust import assess_answer_policy, normalize_trust_level
+from app.modules.qa.graph.nodes.node_rerank import resolve_version_scope, step_1_merge_docs, step_3_topk
 
 
 @pytest.fixture

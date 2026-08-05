@@ -1,5 +1,3 @@
-"""Agent 持久化运行所需的状态、租约和检查点基础能力。"""
+"""Deprecated runtime imports; use :mod:`app.platform.runtime`."""
 
-from app.runtime.run_store import RunRecord, RunStatus, get_run_store
-
-__all__ = ["RunRecord", "RunStatus", "get_run_store"]
+from app.platform.runtime import *

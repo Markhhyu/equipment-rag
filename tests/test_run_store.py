@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from app.runtime.run_store import InMemoryRunStore, RunStatus
+from app.platform.runtime.run_store import InMemoryRunStore, RunStatus
 
 
 def test_run_lifecycle_and_idempotent_creation():

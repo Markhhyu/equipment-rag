@@ -1,6 +1,6 @@
-from app.clients.document_registry_utils import InMemoryDocumentRegistry
-from app.query_process.agent.nodes.node_search_embedding import build_query_filter
-from app.query_process.version_context import latest_pinned_version_context, resolve_version_context
+from app.modules.knowledge.infrastructure.document_registry import InMemoryDocumentRegistry
+from app.modules.qa.graph.nodes.node_search_embedding import build_query_filter
+from app.modules.knowledge.domain.version_context import latest_pinned_version_context, resolve_version_context
 
 
 def _active_version(

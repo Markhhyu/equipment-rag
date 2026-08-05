@@ -1,4 +1,4 @@
-from app.utils.task_utils import (
+from app.platform.runtime.task_progress import (
     TASK_STATUS_COMPLETED,
     add_done_task,
     add_running_task,

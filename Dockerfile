@@ -35,4 +35,4 @@ RUN mkdir -p /app/logs /app/output
 
 EXPOSE 8000 8001 8002
 
-CMD ["uvicorn", "app.query_process.api.query_service:app", "--host", "0.0.0.0", "--port", "8001"]
+CMD ["uvicorn", "app.apps.query_api:app", "--host", "0.0.0.0", "--port", "8001"]
