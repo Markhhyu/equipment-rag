@@ -62,6 +62,16 @@ if FRONTEND_ASSETS_DIR.exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_ASSETS_DIR), name="frontend-assets")
 
 
+@app.get("/", response_class=FileResponse, include_in_schema=False)
+@app.get("/apps.html", response_class=FileResponse)
+async def apps_page():
+    """返回业务应用与系统组件的统一入口。"""
+    built_path = FRONTEND_DIST_DIR / "apps.html"
+    if not built_path.exists():
+        raise HTTPException(status_code=404, detail="应用中心尚未构建，请先执行前端构建")
+    return FileResponse(built_path)
+
+
 @app.get("/chat.html")
 async def chat():
     """优先返回Vue构建页面；本地尚未构建时保留旧页面作为降级入口。"""

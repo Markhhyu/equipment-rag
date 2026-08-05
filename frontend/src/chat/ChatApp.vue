@@ -12,6 +12,7 @@ import {
   DocumentAdd,
   Files,
   FolderOpened,
+  Grid,
   Loading,
   MoreFilled,
   Picture,
@@ -182,6 +183,7 @@ let activeStream: AbortController | null = null
 const importUrl = siblingServiceUrl('8000', '/import.html')
 const knowledgeUrl = siblingServiceUrl('8000', '/knowledge.html')
 const analyticsUrl = '/analytics.html'
+const appsUrl = '/apps.html'
 const shortSessionId = computed(() => sessionId.value.slice(0, 8))
 const canSend = computed(() => !sending.value && (!!question.value.trim() || pendingImages.value.length > 0))
 const attachmentHint = computed(() => `每轮最多 ${attachmentConfig.value.max_files} 张，单张不超过 ${formatBytes(attachmentConfig.value.max_bytes)}`)
@@ -525,6 +527,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="sidebar-footer">
+        <a :href="appsUrl" class="sidebar-link"><el-icon><Grid /></el-icon>应用与组件</a>
         <a :href="importUrl" class="sidebar-link"><el-icon><DocumentAdd /></el-icon>知识库导入</a>
         <a :href="knowledgeUrl" class="sidebar-link"><el-icon><Files /></el-icon>知识库治理</a>
         <a :href="analyticsUrl" class="sidebar-link"><el-icon><DataAnalysis /></el-icon>问答运营看板</a>
@@ -543,7 +546,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="header-actions">
-          <a class="top-button" :href="analyticsUrl" title="打开问答运营看板"><el-icon><DataAnalysis /></el-icon><span class="desktop-label">运营看板</span></a>
+          <a class="top-button" :href="appsUrl" title="打开应用与组件中心"><el-icon><Grid /></el-icon><span class="desktop-label">应用中心</span></a>
           <button class="top-button" @click="settingsVisible = true"><el-icon><Connection /></el-icon><span class="desktop-label">API 设置</span></button>
           <button class="top-button danger" :disabled="sending" @click="clearCurrentSession(false)"><el-icon><Delete /></el-icon><span class="desktop-label">清空会话</span></button>
         </div>

@@ -5,6 +5,8 @@ def test_query_support_routers_are_registered():
     registered = {(route.path, method) for route in app.routes for method in getattr(route, "methods", set())}
 
     expected = {
+        ("/", "GET"),
+        ("/apps.html", "GET"),
         ("/feedback", "POST"),
         ("/resolution", "POST"),
         ("/analytics/summary", "GET"),

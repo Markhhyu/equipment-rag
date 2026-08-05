@@ -8,6 +8,7 @@ import {
   Connection,
   Document,
   Files,
+  Grid,
   Management,
   Loading,
   Picture,
@@ -61,6 +62,7 @@ const fileInput = ref<HTMLInputElement | null>(null)
 const pollTimers = new Map<string, number>()
 const chatUrl = siblingServiceUrl('8001', '/chat.html')
 const knowledgeUrl = '/knowledge.html'
+const appsUrl = '/apps.html'
 
 const activeCount = computed(() => tasks.value.filter((task) =>
   ['queued', 'uploading', 'processing'].includes(task.state)
@@ -221,6 +223,7 @@ onBeforeUnmount(() => {
         <div class="brand-copy"><strong>设备知识助手</strong><span>知识库管理中心</span></div>
       </div>
       <nav>
+        <a :href="appsUrl" class="top-button"><el-icon><Grid /></el-icon><span class="desktop-label">应用中心</span></a>
         <a :href="knowledgeUrl" class="top-button"><el-icon><Management /></el-icon><span class="desktop-label">知识库治理</span></a>
         <a :href="chatUrl" class="top-button"><el-icon><ChatDotRound /></el-icon><span class="desktop-label">返回问答</span></a>
         <button class="top-button" @click="settingsVisible = true"><el-icon><Connection /></el-icon><span class="desktop-label">API 设置</span></button>

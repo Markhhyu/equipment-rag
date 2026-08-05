@@ -9,6 +9,7 @@ export default defineConfig({
     emptyOutDir: true,
     rollupOptions: {
       input: {
+        apps: resolve(__dirname, 'apps.html'),
         chat: resolve(__dirname, 'chat.html'),
         analytics: resolve(__dirname, 'analytics.html'),
         import: resolve(__dirname, 'import.html'),

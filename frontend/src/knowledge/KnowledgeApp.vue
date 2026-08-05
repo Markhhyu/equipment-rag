@@ -8,6 +8,7 @@ import {
   DocumentAdd,
   Files,
   FolderOpened,
+  Grid,
   Loading,
   Lock,
   Refresh,
@@ -95,6 +96,7 @@ const uploadForm = ref(emptyUploadForm())
 const fileInput = ref<HTMLInputElement | null>(null)
 
 const chatUrl = siblingServiceUrl('8001', '/chat.html')
+const appsUrl = '/apps.html'
 const activeCount = computed(() => documents.value.filter((item) => item.status === 'active').length)
 const draftCount = computed(() => documents.value.filter((item) => item.status === 'draft').length)
 const disabledCount = computed(() => documents.value.filter((item) => item.status === 'disabled').length)
@@ -361,6 +363,7 @@ onMounted(loadDocuments)
         <div class="brand-copy"><strong>知识库治理</strong><span>版本、发布与审计中心</span></div>
       </div>
       <nav>
+        <a :href="appsUrl" class="top-button"><el-icon><Grid /></el-icon><span class="desktop-label">应用中心</span></a>
         <a href="/import.html" class="top-button"><el-icon><UploadFilled /></el-icon><span class="desktop-label">快速导入</span></a>
         <a :href="chatUrl" class="top-button"><el-icon><ChatDotRound /></el-icon><span class="desktop-label">返回问答</span></a>
         <button class="top-button" @click="settingsVisible = true"><el-icon><Connection /></el-icon><span class="desktop-label">API 设置</span></button>

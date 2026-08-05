@@ -77,6 +77,16 @@ if FRONTEND_ASSETS_DIR.exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_ASSETS_DIR), name="frontend-assets")
 
 
+@app.get("/", response_class=FileResponse, include_in_schema=False)
+@app.get("/apps.html", response_class=FileResponse)
+async def get_apps_page():
+    """返回业务应用与系统组件的统一入口。"""
+    built_html_path = FRONTEND_DIST_DIR / "apps.html"
+    if not built_html_path.exists():
+        raise HTTPException(status_code=404, detail="应用中心尚未构建，请先执行前端构建")
+    return FileResponse(path=built_html_path, media_type="text/html")
+
+
 @app.get("/health", tags=["system"])
 async def health():
     """容器编排与负载均衡器使用的存活探针。"""

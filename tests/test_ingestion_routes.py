@@ -5,6 +5,8 @@ def test_knowledge_governance_router_is_registered():
     registered = {(route.path, method) for route in app.routes for method in getattr(route, "methods", set())}
 
     expected = {
+        ("/", "GET"),
+        ("/apps.html", "GET"),
         ("/knowledge/documents", "GET"),
         ("/knowledge/legacy/register", "POST"),
         ("/knowledge/documents/{document_id}", "GET"),
