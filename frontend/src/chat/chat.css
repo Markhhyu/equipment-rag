@@ -121,6 +121,9 @@
 .resolution-actions button:nth-child(2).active { color: #9b6012; border-color: #efc37f; background: #fff7e8; }
 .resolution-actions button:nth-child(3).active { color: #b4373c; border-color: #eca4a7; background: #fff0f1; }
 .resolution-actions button:disabled { opacity: .55; cursor: wait; }
+.workflow-escalation { width: 100%; margin-top: 8px; padding: 10px 11px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid #d9e2ef; border-radius: 9px; background: #f7f9fc; }
+.workflow-escalation > span { min-width: 0; display: flex; align-items: center; gap: 8px; color: #52617a; }.workflow-escalation > span > .el-icon { flex: 0 0 auto; color: #526bb5; font-size: 17px; }.workflow-escalation strong, .workflow-escalation small { display: block; }.workflow-escalation strong { font-size: 10px; }.workflow-escalation small { margin-top: 2px; color: #8791a2; font-size: 8px; }
+.workflow-escalation > button { min-height: 30px; padding: 0 10px; display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; border: 1px solid #c6d1e4; border-radius: 7px; color: #40598e; font-size: 9px; font-weight: 650; background: #fff; cursor: pointer; }.workflow-escalation > button:hover { border-color: #94a8ce; background: #f1f4fb; }.workflow-escalation > button:disabled { opacity: .55; cursor: wait; }
 
 .composer-area { padding: 0 clamp(20px, 5vw, 76px) 15px; flex: 0 0 auto; }
 .composer { position: relative; max-width: 900px; margin: 0 auto; border: 1px solid #dce1eb; border-radius: 17px; background: rgba(255, 255, 255, .96); box-shadow: 0 14px 40px rgba(28, 41, 78, .1); transition: .2s ease; overflow: hidden; }
@@ -155,4 +158,5 @@
   .message-content { max-width: 88%; }.message-avatar { width: 30px; height: 30px; }.message-images { grid-template-columns: repeat(2, minmax(0, 150px)); }.message-images img { height: 125px; }
   .composer-area { padding: 0 10px 9px; }.attachment-actions > span { max-width: 190px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .resolution-panel { align-items: flex-start; flex-direction: column; }.resolution-actions { width: 100%; }.resolution-actions button { flex: 1; justify-content: center; padding: 0 5px; }
+  .workflow-escalation { align-items: flex-start; }.workflow-escalation > span small { max-width: 150px; }
 }

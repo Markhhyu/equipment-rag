@@ -60,7 +60,8 @@ const typeLabels: Record<string, string> = {
 }
 const fieldLabels: Record<string, string> = {
   question: '问题描述', title: '标题', summary: '摘要', trace_id: '问答 Trace', session_id: '会话 ID',
-  device_model: '设备型号', device_name: '设备名称', equipment_version: '设备版本', software_version: '软件版本',
+  device_model: '设备型号', device_models: '设备型号', device_name: '设备名称', equipment_version: '设备版本', software_version: '软件版本',
+  version_labels: '关联版本', image_refs: '现场图片引用', resolution_status: '问答处理状态',
   firmware_version: '固件版本', hardware_revision: '硬件修订', reason: '转人工原因', review_reason: '复核原因',
   answer: '助手回答', resolution: '处理结论', root_cause: '问题原因', solution: '处理方案', verification: '验证结果',
 }
@@ -98,7 +99,9 @@ function caseTitle(item: WorkflowCase): string {
 }
 
 function caseDevice(item: WorkflowCase): string {
-  return String(item.subject.device_model || item.subject.device_name || item.context.device_model || '')
+  return formatValue(
+    item.subject.device_models || item.subject.device_model || item.subject.device_name || item.context.device_model || '',
+  )
 }
 
 function formatValue(value: unknown): string {
@@ -128,11 +131,15 @@ async function loadCases(): Promise<void> {
 }
 
 async function openDetail(item: WorkflowCase): Promise<void> {
+  await openDetailById(item.case_id, item)
+}
+
+async function openDetailById(caseId: string, initial?: WorkflowCase): Promise<void> {
   detailVisible.value = true
   detailLoading.value = true
-  selected.value = item
+  selected.value = initial ?? cases.value.find((item) => item.case_id === caseId) ?? null
   try {
-    const response = await apiFetch(`/workflow/cases/${encodeURIComponent(item.case_id)}`, apiKey.value)
+    const response = await apiFetch(`/workflow/cases/${encodeURIComponent(caseId)}`, apiKey.value)
     selected.value = await response.json() as WorkflowCase
   } catch (error) {
     ElMessage.error(`工单详情加载失败：${errorText(error)}`)
@@ -148,7 +155,11 @@ async function saveSettings(value: string): Promise<void> {
   ElMessage.success('连接设置已保存')
 }
 
-onMounted(loadCases)
+onMounted(async () => {
+  await loadCases()
+  const caseId = new URLSearchParams(window.location.search).get('case_id')?.trim()
+  if (caseId) await openDetailById(caseId)
+})
 </script>
 
 <template>

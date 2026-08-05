@@ -114,6 +114,7 @@ async def history(
                     "text": record.get("text", ""),
                     "rewritten_query": record.get("rewritten_query", ""),
                     "item_names": record.get("item_names", []),
+                    "image_refs": record.get("image_urls", []),
                     "image_urls": resolve_object_urls(record.get("image_urls", [])),
                     "sources": record.get("sources", []),
                     "requires_human_review": bool(record.get("requires_human_review")),

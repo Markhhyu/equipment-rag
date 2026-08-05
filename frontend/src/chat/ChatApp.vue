@@ -20,6 +20,7 @@ import {
   Promotion,
   Refresh,
   Setting,
+  Tickets,
   UploadFilled,
   Warning,
 } from '@element-plus/icons-vue'
@@ -65,6 +66,7 @@ interface ChatMessage {
   role: Role
   text: string
   imageUrls: string[]
+  imageRefs?: string[]
   traceId?: string
   feedback?: 0 | 1 | null
   resolutionStatus?: ResolutionStatus | null
@@ -78,6 +80,8 @@ interface ChatMessage {
   reviewReason?: string
   versionScopeOptions?: VersionScopeGroup[]
   selectedVersionContext?: VersionChoice[]
+  workflowCaseId?: string
+  workflowSubmitting?: boolean
 }
 
 interface AnswerSource {
@@ -147,6 +151,8 @@ interface HistoryResponse {
     role: Role
     text: string
     image_urls?: string[]
+    image_refs?: string[]
+    item_names?: string[]
     trace_id?: string
     feedback_value?: 0 | 1 | null
     resolution_status?: ResolutionStatus | null
@@ -184,6 +190,8 @@ const importUrl = siblingServiceUrl('8000', '/import.html')
 const knowledgeUrl = siblingServiceUrl('8000', '/knowledge.html')
 const analyticsUrl = '/analytics.html'
 const appsUrl = '/apps.html'
+const workflowCasesUrl = siblingServiceUrl('8002', '/workflow/cases')
+const workflowPageUrl = siblingServiceUrl('8002', '/workflow.html')
 const shortSessionId = computed(() => sessionId.value.slice(0, 8))
 const canSend = computed(() => !sending.value && (!!question.value.trim() || pendingImages.value.length > 0))
 const attachmentHint = computed(() => `每轮最多 ${attachmentConfig.value.max_files} 张，单张不超过 ${formatBytes(attachmentConfig.value.max_bytes)}`)
@@ -204,6 +212,90 @@ function authErrorMessage(error: unknown): string {
 
 function uniqueId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+function previousUserMessage(message: ChatMessage): ChatMessage | undefined {
+  const messageIndex = messages.value.indexOf(message)
+  for (let index = messageIndex - 1; index >= 0; index -= 1) {
+    if (messages.value[index].role === 'user') return messages.value[index]
+  }
+  return undefined
+}
+
+function workflowDetailUrl(caseId: string): string {
+  const url = new URL(workflowPageUrl)
+  url.searchParams.set('case_id', caseId)
+  return url.toString()
+}
+
+function workflowSources(message: ChatMessage): Array<Record<string, unknown>> {
+  return (message.sources ?? []).map((source) => ({
+    chunk_id: source.chunk_id,
+    document_id: source.document_id,
+    revision_id: source.revision_id,
+    version_label: source.version_label,
+    title: source.title,
+    section: source.section,
+    page_numbers: source.page_numbers,
+    url: source.url,
+    snippet: source.snippet,
+    device_model: source.device_model,
+    equipment_version: source.equipment_version,
+    software_version: source.software_version,
+    firmware_version: source.firmware_version,
+    hardware_revision: source.hardware_revision,
+    trust_level: source.trust_level,
+  }))
+}
+
+async function openOrCreateWorkflowCase(message: ChatMessage): Promise<void> {
+  if (!message.traceId || message.workflowSubmitting) return
+  if (message.workflowCaseId) {
+    window.location.href = workflowDetailUrl(message.workflowCaseId)
+    return
+  }
+
+  message.workflowSubmitting = true
+  try {
+    const userMessage = previousUserMessage(message)
+    const deviceModels = Array.from(new Set([
+      ...(message.selectedVersionContext ?? []).map((item) => item.device_model || ''),
+      ...(message.sources ?? []).map((item) => item.device_model || ''),
+    ].filter(Boolean)))
+    const versionLabels = Array.from(new Set(
+      (message.selectedVersionContext ?? []).map((item) => item.label).filter(Boolean),
+    ))
+    const response = await apiFetch(workflowCasesUrl, apiKey.value, {
+      method: 'POST',
+      body: JSON.stringify({
+        case_type: 'equipment_issue',
+        subject: {
+          question: userMessage?.text || '现场图片问题',
+          trace_id: message.traceId,
+          session_id: sessionId.value,
+          device_models: deviceModels,
+          version_labels: versionLabels,
+        },
+        context: {
+          answer: message.text,
+          requires_human_review: Boolean(message.requiresHumanReview),
+          review_reason: message.reviewReason || '',
+          resolution_status: message.resolutionStatus || 'unsolved',
+          selected_version_context: message.selectedVersionContext ?? [],
+          sources: workflowSources(message),
+          image_refs: userMessage?.imageRefs ?? [],
+        },
+        idempotency_key: `qa-${message.traceId}`,
+      }),
+    }, true)
+    const workflowCase = await response.json() as { case_id: string }
+    message.workflowCaseId = workflowCase.case_id
+    window.location.href = workflowDetailUrl(workflowCase.case_id)
+  } catch (error) {
+    ElMessage.error(`人工处理发起失败：${authErrorMessage(error)}`)
+  } finally {
+    message.workflowSubmitting = false
+  }
 }
 
 function sanitizeAssistantText(text: string): string {
@@ -238,6 +330,7 @@ async function loadHistory(): Promise<void> {
       role: item.role,
       text: item.role === 'assistant' ? sanitizeAssistantText(item.text) : item.text,
       imageUrls: item.image_urls ?? [],
+      imageRefs: item.image_refs ?? [],
       traceId: item.trace_id,
       feedback: item.feedback_value,
       resolutionStatus: item.resolution_status,
@@ -343,7 +436,7 @@ async function sendMessage(versionChoice?: VersionChoice, resetVersionContext = 
   const text = question.value.trim()
   const selectedImages = [...pendingImages.value]
   const userMessage: ChatMessage = {
-    id: uniqueId('user'), role: 'user', text, imageUrls: selectedImages.map((item) => item.previewUrl), status: 'ready', time: Date.now() / 1000,
+    id: uniqueId('user'), role: 'user', text, imageUrls: selectedImages.map((item) => item.previewUrl), imageRefs: [], status: 'ready', time: Date.now() / 1000,
   }
   const assistant: ChatMessage = {
     id: uniqueId('assistant'), role: 'assistant', text: '', imageUrls: [], status: 'streaming', doneList: [], runningList: [], sources: [],
@@ -357,6 +450,7 @@ async function sendMessage(versionChoice?: VersionChoice, resetVersionContext = 
   try {
     const uploadedAttachments = await uploadImages(selectedImages)
     const imageRefs = uploadedAttachments.map((attachment) => attachment.object_ref)
+    userMessage.imageRefs = imageRefs
     if (uploadedAttachments.length) {
       // 本地blob预览只用于上传阶段；上传后切换为MinIO短期签名地址，避免释放blob后消息图片失效。
       userMessage.imageUrls = uploadedAttachments.map((attachment) => attachment.preview_url)
@@ -668,6 +762,18 @@ onBeforeUnmount(() => {
                     @click="submitResolution(message, 'unsolved')"
                   ><el-icon><CircleClose /></el-icon>未解决</button>
                 </div>
+              </div>
+
+              <div
+                v-if="message.role === 'assistant' && message.traceId && message.status === 'ready' && (message.requiresHumanReview || message.resolutionStatus === 'unsolved' || message.workflowCaseId)"
+                class="workflow-escalation"
+              >
+                <span><el-icon><Tickets /></el-icon><span><strong>人工处理</strong><small>转交工程师或供应商继续处理</small></span></span>
+                <button :disabled="message.workflowSubmitting" @click="openOrCreateWorkflowCase(message)">
+                  <el-icon v-if="message.workflowSubmitting" class="is-loading"><Loading /></el-icon>
+                  <el-icon v-else><Tickets /></el-icon>
+                  {{ message.workflowSubmitting ? '正在创建' : message.workflowCaseId ? '查看工单' : '发起处理' }}
+                </button>
               </div>
 
               <div class="message-meta">
