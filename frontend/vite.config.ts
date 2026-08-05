@@ -14,6 +14,7 @@ export default defineConfig({
         analytics: resolve(__dirname, 'analytics.html'),
         import: resolve(__dirname, 'import.html'),
         knowledge: resolve(__dirname, 'knowledge.html'),
+        workflow: resolve(__dirname, 'workflow.html'),
       },
     },
   },

@@ -92,4 +92,47 @@ def test_workflow_store_is_tenant_isolated():
     )
 
     assert store.get_case("tenant-b", case["case_id"]) is None
+    assert store.list_cases("tenant-b") == {"items": [], "total": 0}
     assert store.list_events("tenant-b") == []
+
+
+def test_workflow_cases_can_be_listed_and_filtered():
+    store = InMemoryWorkflowStore()
+    first = store.create_case(
+        "tenant-a",
+        {
+            "case_type": "equipment_issue",
+            "subject": {"question": "LJ2268 无法启动", "device_model": "LJ2268"},
+            "context": {},
+            "callback_url": "",
+            "idempotency_key": "case-list-a",
+        },
+        "query-service",
+    )
+    store.create_case(
+        "tenant-a",
+        {
+            "case_type": "answer_review",
+            "subject": {"question": "另一台设备报警"},
+            "context": {},
+            "callback_url": "",
+            "idempotency_key": "case-list-b",
+        },
+        "query-service",
+    )
+    store.apply_action(
+        "tenant-a",
+        first["case_id"],
+        {"action": "assign", "assignee": "engineer-a", "idempotency_key": "case-list-assign"},
+        "operator",
+    )
+
+    all_cases = store.list_cases("tenant-a")
+    assigned_cases = store.list_cases("tenant-a", status="assigned")
+    matched_cases = store.list_cases("tenant-a", query="LJ2268")
+
+    assert all_cases["total"] == 2
+    assert assigned_cases["total"] == 1
+    assert assigned_cases["items"][0]["case_id"] == first["case_id"]
+    assert matched_cases["total"] == 1
+    assert matched_cases["items"][0]["subject"]["device_model"] == "LJ2268"

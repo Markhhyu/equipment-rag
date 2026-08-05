@@ -31,7 +31,7 @@ export function replaceSessionId(): string {
 
 export function siblingServiceUrl(targetPort: string, page: string): string {
   const url = new URL(window.location.href)
-  if (['localhost', '127.0.0.1'].includes(url.hostname) && ['8000', '8001'].includes(url.port)) {
+  if (['localhost', '127.0.0.1'].includes(url.hostname) && ['8000', '8001', '8002'].includes(url.port)) {
     url.port = targetPort
   }
   url.pathname = page

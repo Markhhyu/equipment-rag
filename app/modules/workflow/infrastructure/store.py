@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import threading
 import uuid
 from copy import deepcopy
@@ -91,6 +92,30 @@ class InMemoryWorkflowStore:
     def get_case(self, tenant_id: str, case_id: str) -> dict[str, Any] | None:
         case = self.cases.get((tenant_id, case_id))
         return _public(deepcopy(case)) if case else None
+
+    def list_cases(
+        self,
+        tenant_id: str,
+        status: str = "",
+        query: str = "",
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        normalized_query = query.strip().casefold()
+        items = [item for (tenant, _), item in self.cases.items() if tenant == tenant_id]
+        if status:
+            items = [item for item in items if item["status"] == status]
+        if normalized_query:
+            items = [
+                item
+                for item in items
+                if normalized_query in json.dumps(item, ensure_ascii=False, default=str).casefold()
+            ]
+        items.sort(key=lambda item: item["updated_at"], reverse=True)
+        total = len(items)
+        return {
+            "items": _public(deepcopy(items[: max(1, min(limit, 500))])),
+            "total": total,
+        }
 
     def apply_action(self, tenant_id: str, case_id: str, payload: dict[str, Any], actor: str) -> dict[str, Any]:
         with self._lock:
@@ -214,6 +239,9 @@ class MongoWorkflowStore(InMemoryWorkflowStore):
         self._delivery_collection = db["workflow_deliveries"]
         self._case_collection.create_index([("tenant_id", ASCENDING), ("case_id", ASCENDING)], unique=True)
         self._case_collection.create_index([("tenant_id", ASCENDING), ("idempotency_key", ASCENDING)], unique=True)
+        self._case_collection.create_index(
+            [("tenant_id", ASCENDING), ("status", ASCENDING), ("updated_at", ASCENDING)]
+        )
         self._action_collection.create_index([("tenant_id", ASCENDING), ("idempotency_key", ASCENDING)], unique=True)
         self._event_collection.create_index([("tenant_id", ASCENDING), ("occurred_at", ASCENDING)])
         self._delivery_collection.create_index([("tenant_id", ASCENDING), ("status", ASCENDING), ("next_retry_at", ASCENDING)])
@@ -249,6 +277,35 @@ class MongoWorkflowStore(InMemoryWorkflowStore):
     def get_case(self, tenant_id: str, case_id: str) -> dict[str, Any] | None:
         case = self._case_collection.find_one({"tenant_id": tenant_id, "case_id": case_id}, {"_id": 0})
         return _public(case) if case else None
+
+    def list_cases(
+        self,
+        tenant_id: str,
+        status: str = "",
+        query: str = "",
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        selector: dict[str, Any] = {"tenant_id": tenant_id}
+        if status:
+            selector["status"] = status
+        if query.strip():
+            pattern = {"$regex": re.escape(query.strip()), "$options": "i"}
+            selector["$or"] = [
+                {"case_id": pattern},
+                {"case_type": pattern},
+                {"assignee": pattern},
+                {"subject.question": pattern},
+                {"subject.title": pattern},
+                {"subject.trace_id": pattern},
+                {"subject.device_model": pattern},
+            ]
+        total = self._case_collection.count_documents(selector)
+        items = list(
+            self._case_collection.find(selector, {"_id": 0})
+            .sort("updated_at", -1)
+            .limit(max(1, min(limit, 500)))
+        )
+        return {"items": _public(items), "total": total}
 
     def apply_action(self, tenant_id: str, case_id: str, payload: dict[str, Any], actor: str) -> dict[str, Any]:
         action_selector = {"tenant_id": tenant_id, "idempotency_key": payload["idempotency_key"]}

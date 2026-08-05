@@ -1,15 +1,19 @@
 from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.platform.observability.prometheus_metrics import install_prometheus
 from app.platform.security.auth import Principal, require_role
 from app.platform.security.http import configure_http_security
 from app.modules.workflow.domain.models import (
     CaseActionRequest,
+    CaseStatus,
     CreateCaseRequest,
     CreateSubscriptionRequest,
     DeliveryAckRequest,
 )
 from app.modules.workflow.infrastructure.store import get_workflow_store
+from app.shared.paths import PROJECT_ROOT
 
 
 app = FastAPI(
@@ -18,6 +22,21 @@ app = FastAPI(
 )
 configure_http_security(app)
 install_prometheus(app, "workflow-api")
+
+FRONTEND_DIST_DIR = PROJECT_ROOT / "frontend" / "dist"
+FRONTEND_ASSETS_DIR = FRONTEND_DIST_DIR / "assets"
+if FRONTEND_ASSETS_DIR.exists():
+    app.mount("/assets", StaticFiles(directory=FRONTEND_ASSETS_DIR), name="frontend-assets")
+
+
+@app.get("/", response_class=FileResponse, include_in_schema=False)
+@app.get("/workflow.html", response_class=FileResponse)
+async def workflow_page():
+    """返回人工处理工单列表与详情页面。"""
+    built_path = FRONTEND_DIST_DIR / "workflow.html"
+    if not built_path.exists():
+        raise HTTPException(status_code=404, detail="人工处理中心尚未构建，请先执行前端构建")
+    return FileResponse(built_path)
 
 
 @app.get("/health")
@@ -28,6 +47,21 @@ async def health():
 @app.post("/workflow/cases", status_code=status.HTTP_201_CREATED)
 async def create_case(request: CreateCaseRequest, principal: Principal = Depends(require_role("workflow"))):
     return get_workflow_store().create_case(principal.tenant_id, request.model_dump(mode="json"), principal.key_id)
+
+
+@app.get("/workflow/cases")
+async def list_cases(
+    case_status: CaseStatus | None = Query(default=None, alias="status"),
+    query: str = Query(default="", max_length=128),
+    limit: int = Query(default=100, ge=1, le=500),
+    principal: Principal = Depends(require_role("workflow")),
+):
+    return get_workflow_store().list_cases(
+        principal.tenant_id,
+        status=case_status.value if case_status else "",
+        query=query,
+        limit=limit,
+    )
 
 
 @app.get("/workflow/cases/{case_id}")

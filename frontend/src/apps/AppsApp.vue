@@ -11,6 +11,7 @@ import {
   Monitor,
   Operation,
   TrendCharts,
+  Tickets,
 } from '@element-plus/icons-vue'
 import type { Component } from 'vue'
 
@@ -38,6 +39,7 @@ const businessApps: AppLink[] = [
   { name: '知识库治理', description: '文档与版本', address: '8000 / knowledge', href: serviceUrl('8000', '/knowledge.html'), icon: Files, tone: 'green' },
   { name: '资料导入', description: '文件处理任务', address: '8000 / import', href: serviceUrl('8000', '/import.html'), icon: DocumentAdd, tone: 'amber' },
   { name: '问答运营', description: '问答结果统计', address: '8001 / analytics', href: serviceUrl('8001', '/analytics.html'), icon: DataAnalysis, tone: 'red' },
+  { name: '人工处理', description: '工单与处理记录', address: '8002 / workflow', href: serviceUrl('8002', '/workflow.html'), icon: Tickets, tone: 'neutral' },
 ]
 
 const componentApps: AppLink[] = [
