@@ -3,6 +3,13 @@
 .apps-brand { display: flex; align-items: center; gap: 11px; text-decoration: none; }
 .apps-brand .brand-mark { width: 37px; height: 37px; border-radius: 8px; }
 .apps-header .top-button { text-decoration: none; }
+.apps-actions { min-width: 0; display: flex; align-items: center; gap: 8px; }
+.identity-chip { min-width: 0; height: 38px; padding: 0 11px; display: flex; align-items: center; gap: 8px; border: 1px solid #dfe3e9; border-radius: 7px; color: #596579; background: #f8f9fb; }
+.identity-chip > .el-icon { flex: 0 0 auto; color: #315be8; }
+.identity-copy { min-width: 0; max-width: 150px; line-height: 1.1; }
+.identity-copy strong, .identity-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.identity-copy strong { color: #344054; font-size: 11px; }
+.identity-copy small { margin-top: 3px; color: #8a92a0; font-size: 9px; }
 .apps-main { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding: 34px 0 64px; }
 .apps-titlebar { min-height: 75px; display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; }
 .apps-titlebar h1 { margin: 8px 0 0; color: #20293b; font-size: 28px; letter-spacing: 0; }
@@ -50,6 +57,9 @@
 
 @media (max-width: 620px) {
   .apps-header { height: 62px; padding: 0 14px; }
+  .apps-actions { gap: 6px; }
+  .identity-chip { width: 36px; padding: 0; justify-content: center; }
+  .identity-copy { display: none; }
   .apps-main { width: calc(100% - 24px); padding-top: 24px; }
   .apps-titlebar { min-height: 62px; align-items: center; }
   .apps-titlebar h1 { font-size: 23px; }

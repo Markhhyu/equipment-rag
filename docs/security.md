@@ -4,7 +4,7 @@ The default configuration is deliberately simple for local evaluation:
 
 - `docker compose up --build` starts without credentials.
 - services bind to `127.0.0.1`;
-- CORS accepts only the two local UI origins;
+- CORS accepts only the configured local UI origins; the unified gateway uses same-origin API requests;
 - MinIO objects remain private and browser links are short-lived signed URLs.
 
 Local mode is not a production security boundary. Production startup fails closed
@@ -44,6 +44,8 @@ deploying it, migrating clients, and then removing the old identity.
 Every browser-facing service exposes `GET /auth/me`. The bundled HTML pages call
 this endpoint before mounting a module, hide navigation entries outside the
 current role set, and show an access-denied state for direct unauthorized URLs.
+The application center also displays the current tenant and key identity and
+allows the browser credential to be replaced or cleared without exposing it.
 This improves least-privilege navigation but is not the final security boundary;
 all protected APIs continue to enforce roles on the server.
 

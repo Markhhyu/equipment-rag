@@ -19,6 +19,11 @@ function save(): void {
   emit('save', draft.value.trim())
   emit('update:modelValue', false)
 }
+
+function clearCredential(): void {
+  emit('save', '')
+  emit('update:modelValue', false)
+}
 </script>
 
 <template>
@@ -52,8 +57,23 @@ function save(): void {
       </template>
     </el-input>
     <template #footer>
-      <el-button @click="emit('update:modelValue', false)">取消</el-button>
-      <el-button type="primary" @click="save">保存设置</el-button>
+      <div class="credential-dialog-footer">
+        <el-button type="danger" plain @click="clearCredential">清除凭据</el-button>
+        <span>
+          <el-button @click="emit('update:modelValue', false)">取消</el-button>
+          <el-button type="primary" @click="save">保存设置</el-button>
+        </span>
+      </div>
     </template>
   </el-dialog>
 </template>
+
+<style scoped>
+.credential-dialog-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.credential-dialog-footer > span { display: flex; gap: 8px; }
+
+@media (max-width: 420px) {
+  .credential-dialog-footer { align-items: stretch; flex-direction: column-reverse; }
+  .credential-dialog-footer > span { justify-content: flex-end; }
+}
+</style>

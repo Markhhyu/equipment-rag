@@ -2,6 +2,7 @@
 import {
   ChatDotRound,
   Coin,
+  Connection,
   DataAnalysis,
   Document,
   DocumentAdd,
@@ -12,10 +13,12 @@ import {
   Operation,
   TrendCharts,
   Tickets,
+  User,
 } from '@element-plus/icons-vue'
-import { computed, type Component } from 'vue'
-import { hasAppRole, type AppRole } from '../shared/auth'
-import { applicationPageUrl } from '../shared/storage'
+import { computed, ref, type Component } from 'vue'
+import ApiKeyDialog from '../shared/ApiKeyDialog.vue'
+import { authState, hasAppRole, type AppRole } from '../shared/auth'
+import { applicationPageUrl, directServiceUrl, getApiKey, saveApiKey } from '../shared/storage'
 
 interface AppLink {
   name: string
@@ -28,15 +31,6 @@ interface AppLink {
   requiredRole: AppRole
 }
 
-function serviceUrl(port: string, path = '/'): string {
-  const url = new URL(window.location.href)
-  url.port = port
-  url.pathname = path
-  url.search = ''
-  url.hash = ''
-  return url.toString()
-}
-
 const businessApps: AppLink[] = [
   { name: '智能问答', description: '设备咨询', address: '/chat', href: applicationPageUrl('/chat', '8001', '/chat.html'), icon: ChatDotRound, tone: 'blue', requiredRole: 'query' },
   { name: '知识库治理', description: '文档与版本', address: '/knowledge', href: applicationPageUrl('/knowledge', '8000', '/knowledge.html'), icon: Files, tone: 'green', requiredRole: 'admin' },
@@ -46,18 +40,18 @@ const businessApps: AppLink[] = [
 ]
 
 const componentApps: AppLink[] = [
-  { name: 'Attu', description: 'Milvus 管理', address: '默认端口 3002', href: serviceUrl('3002'), icon: Coin, tone: 'green', external: true, requiredRole: 'admin' },
-  { name: 'Langfuse', description: 'LLM 链路追踪', address: '默认端口 3000', href: serviceUrl('3000'), icon: Operation, tone: 'blue', external: true, requiredRole: 'admin' },
-  { name: 'MinIO', description: '业务对象存储', address: '默认端口 9001', href: serviceUrl('9001'), icon: Files, tone: 'amber', external: true, requiredRole: 'admin' },
-  { name: 'Grafana', description: '指标仪表盘', address: '默认端口 3001', href: serviceUrl('3001'), icon: Histogram, tone: 'red', external: true, requiredRole: 'admin' },
-  { name: 'Prometheus', description: '指标查询', address: '默认端口 9090', href: serviceUrl('9090'), icon: TrendCharts, tone: 'blue', external: true, requiredRole: 'admin' },
-  { name: 'Langfuse MinIO', description: '观测数据存储', address: '默认端口 9191', href: serviceUrl('9191'), icon: Files, tone: 'neutral', external: true, requiredRole: 'admin' },
+  { name: 'Attu', description: 'Milvus 管理', address: '默认端口 3002', href: directServiceUrl('3002'), icon: Coin, tone: 'green', external: true, requiredRole: 'admin' },
+  { name: 'Langfuse', description: 'LLM 链路追踪', address: '默认端口 3000', href: directServiceUrl('3000'), icon: Operation, tone: 'blue', external: true, requiredRole: 'admin' },
+  { name: 'MinIO', description: '业务对象存储', address: '默认端口 9001', href: directServiceUrl('9001'), icon: Files, tone: 'amber', external: true, requiredRole: 'admin' },
+  { name: 'Grafana', description: '指标仪表盘', address: '默认端口 3001', href: directServiceUrl('3001'), icon: Histogram, tone: 'red', external: true, requiredRole: 'admin' },
+  { name: 'Prometheus', description: '指标查询', address: '默认端口 9090', href: directServiceUrl('9090'), icon: TrendCharts, tone: 'blue', external: true, requiredRole: 'admin' },
+  { name: 'Langfuse MinIO', description: '观测数据存储', address: '默认端口 9191', href: directServiceUrl('9191'), icon: Files, tone: 'neutral', external: true, requiredRole: 'admin' },
 ]
 
 const apiApps: AppLink[] = [
-  { name: '查询 API', description: '接口文档', address: '默认端口 8001', href: serviceUrl('8001', '/docs'), icon: Document, tone: 'blue', external: true, requiredRole: 'admin' },
-  { name: '导入 API', description: '接口文档', address: '默认端口 8000', href: serviceUrl('8000', '/docs'), icon: Document, tone: 'amber', external: true, requiredRole: 'admin' },
-  { name: '工作流 API', description: '接口文档', address: '默认端口 8002', href: serviceUrl('8002', '/docs'), icon: Document, tone: 'green', external: true, requiredRole: 'admin' },
+  { name: '查询 API', description: '接口文档', address: '默认端口 8001', href: directServiceUrl('8001', '/docs'), icon: Document, tone: 'blue', external: true, requiredRole: 'admin' },
+  { name: '导入 API', description: '接口文档', address: '默认端口 8000', href: directServiceUrl('8000', '/docs'), icon: Document, tone: 'amber', external: true, requiredRole: 'admin' },
+  { name: '工作流 API', description: '接口文档', address: '默认端口 8002', href: directServiceUrl('8002', '/docs'), icon: Document, tone: 'green', external: true, requiredRole: 'admin' },
 ]
 
 const visibleBusinessApps = computed(() => businessApps.filter((item) => hasAppRole(item.requiredRole)))
@@ -67,6 +61,22 @@ const visibleEntryCount = computed(() => (
   visibleBusinessApps.value.length + visibleComponentApps.value.length + visibleApiApps.value.length
 ))
 const homeUrl = computed(() => visibleBusinessApps.value[0]?.href || '#')
+const settingsVisible = ref(false)
+const apiKey = ref(getApiKey())
+const identityName = computed(() => authState.principal?.authenticated
+  ? authState.principal.key_id
+  : '本地开发')
+const tenantName = computed(() => authState.principal?.tenant_id || '未连接')
+const identityTitle = computed(() => {
+  const principal = authState.principal
+  if (!principal) return '未连接'
+  return `${principal.tenant_id} / ${principal.key_id} / ${principal.roles.join(', ')}`
+})
+
+function saveSettings(value: string): void {
+  saveApiKey(value)
+  apiKey.value = value.trim()
+}
 </script>
 
 <template>
@@ -76,9 +86,18 @@ const homeUrl = computed(() => visibleBusinessApps.value[0]?.href || '#')
         <span class="brand-mark">EA</span>
         <span class="brand-copy"><strong>设备知识助手</strong><span>应用与组件中心</span></span>
       </a>
-      <a v-if="hasAppRole('query')" class="top-button" :href="applicationPageUrl('/chat', '8001', '/chat.html')">
-        <el-icon><ChatDotRound /></el-icon><span class="desktop-label">进入问答</span>
-      </a>
+      <div class="apps-actions">
+        <span class="identity-chip" :title="identityTitle">
+          <el-icon><User /></el-icon>
+          <span class="identity-copy"><strong>{{ identityName }}</strong><small>{{ tenantName }}</small></span>
+        </span>
+        <a v-if="hasAppRole('query')" class="top-button" :href="applicationPageUrl('/chat', '8001', '/chat.html')">
+          <el-icon><ChatDotRound /></el-icon><span class="desktop-label">进入问答</span>
+        </a>
+        <button class="top-button" type="button" title="连接设置" aria-label="连接设置" @click="settingsVisible = true">
+          <el-icon><Connection /></el-icon><span class="desktop-label">连接设置</span>
+        </button>
+      </div>
     </header>
 
     <main class="apps-main">
@@ -130,5 +149,6 @@ const homeUrl = computed(() => visibleBusinessApps.value[0]?.href || '#')
         </div>
       </section>
     </main>
+    <ApiKeyDialog v-model="settingsVisible" :api-key="apiKey" @save="saveSettings" />
   </div>
 </template>
