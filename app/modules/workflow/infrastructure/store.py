@@ -16,7 +16,7 @@ from typing import Any
 from pymongo import ASCENDING, MongoClient
 from pymongo.errors import DuplicateKeyError
 
-from app.modules.workflow.domain.models import CaseStatus, DeliveryStatus, WorkflowActionType
+from app.modules.workflow.domain.models import CaseStatus, DeliveryStatus, KnowledgeDecision, WorkflowActionType
 
 
 TRANSITIONS = {
@@ -46,6 +46,21 @@ def _event_payload(event: dict[str, Any]) -> bytes:
         for key, value in event.items()
     }
     return json.dumps(serializable, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _validate_knowledge_decision(action: WorkflowActionType, payload: dict[str, Any]) -> str | None:
+    raw_decision = payload.get("knowledge_decision")
+    if raw_decision in (None, ""):
+        return None
+    decision = KnowledgeDecision(raw_decision)
+    if action != WorkflowActionType.RESOLVE:
+        raise ValueError("只有 resolve 动作可以提交知识沉淀决定")
+    if decision == KnowledgeDecision.INCLUDE:
+        result = payload.get("result") or {}
+        missing = [field for field in ("solution", "verification") if not str(result.get(field) or "").strip()]
+        if missing:
+            raise ValueError(f"进入知识候选必须提供字段：{', '.join(missing)}")
+    return decision.value
 
 
 class InMemoryWorkflowStore:
@@ -81,6 +96,7 @@ class InMemoryWorkflowStore:
                 "idempotency_key": payload["idempotency_key"],
                 "assignee": "",
                 "result": {},
+                "knowledge_decision": None,
                 "external_workflows": [],
                 "created_by": actor,
                 "created_at": now,
@@ -157,11 +173,14 @@ class InMemoryWorkflowStore:
                 raise ValueError(f"状态 {case['status']} 不允许执行动作 {action.value}")
             if action == WorkflowActionType.ASSIGN and not str(payload.get("assignee") or "").strip():
                 raise ValueError("assign 动作必须提供 assignee")
+            knowledge_decision = _validate_knowledge_decision(action, payload)
             case["status"] = target.value
             if payload.get("assignee"):
                 case["assignee"] = str(payload["assignee"])
             if payload.get("result"):
                 case["result"] = deepcopy(payload["result"])
+            if knowledge_decision is not None:
+                case["knowledge_decision"] = knowledge_decision
             case["updated_at"] = _now()
             self.actions[action_key] = {**deepcopy(payload), "case_id": case_id, "actor": actor}
             self._emit(tenant_id, case, f"review.{target.value}")
@@ -223,8 +242,11 @@ class InMemoryWorkflowStore:
             "occurred_at": _now(),
             "tenant_id": tenant_id,
             "case_id": case["case_id"],
+            "status": case["status"],
             "subject": deepcopy(case["subject"]),
             "context": deepcopy(case["context"]),
+            "result": deepcopy(case.get("result") or {}),
+            "knowledge_decision": case.get("knowledge_decision"),
             "callback_url": case["callback_url"],
         }
         self.events.append(event)
@@ -289,6 +311,7 @@ class MongoWorkflowStore(InMemoryWorkflowStore):
             "idempotency_key": payload["idempotency_key"],
             "assignee": "",
             "result": {},
+            "knowledge_decision": None,
             "external_workflows": [],
             "created_by": actor,
             "created_at": now,
@@ -375,11 +398,14 @@ class MongoWorkflowStore(InMemoryWorkflowStore):
             raise ValueError(f"状态 {case['status']} 不允许执行动作 {action.value}")
         if action == WorkflowActionType.ASSIGN and not str(payload.get("assignee") or "").strip():
             raise ValueError("assign 动作必须提供 assignee")
+        knowledge_decision = _validate_knowledge_decision(action, payload)
         updates: dict[str, Any] = {"status": target.value, "updated_at": _now()}
         if payload.get("assignee"):
             updates["assignee"] = str(payload["assignee"])
         if payload.get("result"):
             updates["result"] = deepcopy(payload["result"])
+        if knowledge_decision is not None:
+            updates["knowledge_decision"] = knowledge_decision
         result = self._case_collection.update_one(
             {"tenant_id": tenant_id, "case_id": case_id, "status": case["status"]},
             {"$set": updates},
@@ -471,8 +497,11 @@ class MongoWorkflowStore(InMemoryWorkflowStore):
             "occurred_at": _now(),
             "tenant_id": tenant_id,
             "case_id": case["case_id"],
+            "status": case["status"],
             "subject": deepcopy(case["subject"]),
             "context": deepcopy(case["context"]),
+            "result": deepcopy(case.get("result") or {}),
+            "knowledge_decision": case.get("knowledge_decision"),
             "callback_url": case["callback_url"],
         }
         self._event_collection.insert_one(deepcopy(event))

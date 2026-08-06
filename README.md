@@ -521,6 +521,8 @@ curl -N "http://127.0.0.1:8001/stream/demo-session-002"
 
 标准状态固定为 `pending`、`assigned`、`in_review`、`resolved`、`rejected`、`cancelled`。所有创建和动作请求
 都携带 `idempotency_key`；投递包含 `delivery_id`、重试计数、下次重试时间和 `sha256=` HMAC 签名。
+解决动作可通过 `knowledge_decision=include|exclude` 明确是否进入知识候选。选择 `include` 时必须提供标准
+`result.solution` 和 `result.verification`；`review.resolved` 事件会携带处理结果和沉淀决定，供独立知识消费者处理。
 
 ---
 

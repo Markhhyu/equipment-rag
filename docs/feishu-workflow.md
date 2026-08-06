@@ -13,6 +13,28 @@
 
 本阶段只实现“发起审批”。审批完成事件、处理结果回写和知识库候选生成将在后续同步连接器中实现。
 
+## 标准处理结果契约
+
+飞书、企微、钉钉或其他 OA 的同步连接器不直接修改知识库。连接器先把厂商表单字段转换为平台标准结果，
+再调用 `POST /workflow/cases/{case_id}/actions`：
+
+```json
+{
+  "action": "resolve",
+  "result": {
+    "root_cause": "接线端子松动",
+    "solution": "重新紧固端子",
+    "verification": "连续运行两小时无报警"
+  },
+  "knowledge_decision": "include",
+  "idempotency_key": "oa-instance-code:resolved"
+}
+```
+
+`knowledge_decision` 只允许在 `resolve` 动作中使用：`include` 表示进入知识候选，`exclude` 表示不沉淀。
+选择 `include` 时必须同时提供 `solution` 和 `verification`，避免只有“流程已结束”却没有可复用处理经验。
+完成后发出的 `review.resolved` 标准事件会携带工单状态、处理结果和知识沉淀决定，后续知识候选消费者无需理解飞书字段。
+
 ## 飞书侧准备
 
 - 企业自建应用已经安装到审批所在租户，并发布了包含审批 API 权限的版本。

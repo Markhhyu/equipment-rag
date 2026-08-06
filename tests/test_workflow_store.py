@@ -1,7 +1,10 @@
 import hashlib
 import hmac
 
-from app.modules.workflow.domain.models import DeliveryStatus
+import pytest
+from pydantic import ValidationError
+
+from app.modules.workflow.domain.models import CaseActionRequest, DeliveryStatus
 from app.modules.workflow.infrastructure.store import InMemoryWorkflowStore, _event_payload
 
 
@@ -136,3 +139,140 @@ def test_workflow_cases_can_be_listed_and_filtered():
     assert assigned_cases["items"][0]["case_id"] == first["case_id"]
     assert matched_cases["total"] == 1
     assert matched_cases["items"][0]["subject"]["device_model"] == "LJ2268"
+
+
+def test_resolved_case_can_emit_a_valid_knowledge_candidate_decision():
+    store = InMemoryWorkflowStore()
+    store.create_subscription(
+        "tenant-a",
+        {
+            "connector_type": "knowledge-candidate-adapter",
+            "callback_url": "https://knowledge.example.test/events",
+            "event_types": ["review.resolved"],
+            "signing_secret": "knowledge-event-secret-at-least-24",
+        },
+    )
+    case = store.create_case(
+        "tenant-a",
+        {
+            "case_type": "equipment_issue",
+            "subject": {"question": "设备无法启动"},
+            "context": {},
+            "callback_url": "",
+            "idempotency_key": "knowledge-case-a",
+        },
+        "query-service",
+    )
+
+    resolved = store.apply_action(
+        "tenant-a",
+        case["case_id"],
+        {
+            "action": "resolve",
+            "result": {
+                "root_cause": "接线端子松动",
+                "solution": "重新紧固端子",
+                "verification": "连续运行两小时无报警",
+            },
+            "knowledge_decision": "include",
+            "idempotency_key": "knowledge-resolve-a",
+        },
+        "oa-connector",
+    )
+
+    assert resolved["knowledge_decision"] == "include"
+    delivery = store.list_deliveries("tenant-a")[0]
+    assert delivery["event"]["event_type"] == "review.resolved"
+    assert delivery["event"]["status"] == "resolved"
+    assert delivery["event"]["knowledge_decision"] == "include"
+    assert delivery["event"]["result"]["solution"] == "重新紧固端子"
+
+
+def test_knowledge_include_requires_solution_and_verification():
+    store = InMemoryWorkflowStore()
+    case = store.create_case(
+        "tenant-a",
+        {
+            "case_type": "equipment_issue",
+            "subject": {},
+            "context": {},
+            "callback_url": "",
+            "idempotency_key": "knowledge-case-invalid",
+        },
+        "query-service",
+    )
+
+    with pytest.raises(ValueError, match="solution, verification"):
+        store.apply_action(
+            "tenant-a",
+            case["case_id"],
+            {
+                "action": "resolve",
+                "result": {"root_cause": "未知"},
+                "knowledge_decision": "include",
+                "idempotency_key": "knowledge-resolve-invalid",
+            },
+            "oa-connector",
+        )
+
+    assert store.get_case("tenant-a", case["case_id"])["status"] == "pending"
+
+
+def test_non_resolve_action_cannot_set_knowledge_decision():
+    store = InMemoryWorkflowStore()
+    case = store.create_case(
+        "tenant-a",
+        {
+            "case_type": "equipment_issue",
+            "subject": {},
+            "context": {},
+            "callback_url": "",
+            "idempotency_key": "knowledge-case-action",
+        },
+        "query-service",
+    )
+
+    with pytest.raises(ValueError, match="resolve"):
+        store.apply_action(
+            "tenant-a",
+            case["case_id"],
+            {
+                "action": "assign",
+                "assignee": "engineer-a",
+                "knowledge_decision": "exclude",
+                "idempotency_key": "knowledge-assign-invalid",
+            },
+            "oa-connector",
+        )
+
+
+def test_case_action_request_validates_knowledge_decision_contract():
+    valid = CaseActionRequest.model_validate(
+        {
+            "action": "resolve",
+            "result": {"solution": "更换损坏部件", "verification": "试运行通过"},
+            "knowledge_decision": "include",
+            "idempotency_key": "validated-resolution",
+        }
+    )
+    assert valid.knowledge_decision == "include"
+
+    with pytest.raises(ValidationError, match="只有 resolve 动作"):
+        CaseActionRequest.model_validate(
+            {
+                "action": "assign",
+                "assignee": "engineer-a",
+                "knowledge_decision": "exclude",
+                "idempotency_key": "invalid-decision-action",
+            }
+        )
+
+    with pytest.raises(ValidationError, match="solution, verification"):
+        CaseActionRequest.model_validate(
+            {
+                "action": "resolve",
+                "result": {},
+                "knowledge_decision": "include",
+                "idempotency_key": "invalid-decision-content",
+            }
+        )

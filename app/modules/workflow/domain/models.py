@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from pydantic import AnyHttpUrl, BaseModel, Field
+from pydantic import AnyHttpUrl, BaseModel, Field, model_validator
 
 
 class CaseStatus(StrEnum):
@@ -24,6 +24,11 @@ class WorkflowActionType(StrEnum):
     RESOLVE = "resolve"
     REJECT = "reject"
     CANCEL = "cancel"
+
+
+class KnowledgeDecision(StrEnum):
+    INCLUDE = "include"
+    EXCLUDE = "exclude"
 
 
 class DeliveryStatus(StrEnum):
@@ -52,7 +57,20 @@ class CaseActionRequest(BaseModel):
     assignee: str = Field(default="", max_length=128)
     comment: str = Field(default="", max_length=2000)
     result: dict[str, Any] = Field(default_factory=dict)
+    knowledge_decision: KnowledgeDecision | None = None
     idempotency_key: str = Field(min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def validate_knowledge_decision(self) -> CaseActionRequest:
+        if self.knowledge_decision is None:
+            return self
+        if self.action != WorkflowActionType.RESOLVE:
+            raise ValueError("只有 resolve 动作可以提交知识沉淀决定")
+        if self.knowledge_decision == KnowledgeDecision.INCLUDE:
+            missing = [field for field in ("solution", "verification") if not str(self.result.get(field) or "").strip()]
+            if missing:
+                raise ValueError(f"进入知识候选必须提供字段：{', '.join(missing)}")
+        return self
 
 
 class CreateSubscriptionRequest(BaseModel):
@@ -79,6 +97,7 @@ class WorkflowCase(BaseModel):
     idempotency_key: str
     assignee: str = ""
     result: dict[str, Any] = Field(default_factory=dict)
+    knowledge_decision: KnowledgeDecision | None = None
     external_workflows: list[ExternalWorkflowReference] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
@@ -90,8 +109,11 @@ class WorkflowEvent(BaseModel):
     occurred_at: datetime
     tenant_id: str
     case_id: str
+    status: CaseStatus
     subject: dict[str, Any]
     context: dict[str, Any]
+    result: dict[str, Any] = Field(default_factory=dict)
+    knowledge_decision: KnowledgeDecision | None = None
     callback_url: str
 
 

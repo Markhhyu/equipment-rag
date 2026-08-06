@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import {
   ArrowRight,
   CircleCheck,
+  Collection,
   Connection,
   Grid,
   Loading,
@@ -31,6 +32,7 @@ interface WorkflowCase {
   subject: DataRecord
   context: DataRecord
   result: DataRecord
+  knowledge_decision?: 'include' | 'exclude' | null
   external_workflows?: Array<{
     connector_type: string
     instance_id: string
@@ -90,6 +92,15 @@ const filteredCases = computed(() => {
 const pendingCount = computed(() => cases.value.filter((item) => ['pending', 'assigned', 'in_review'].includes(item.status)).length)
 const resolvedCount = computed(() => cases.value.filter((item) => item.status === 'resolved').length)
 const closedCount = computed(() => cases.value.filter((item) => ['rejected', 'cancelled'].includes(item.status)).length)
+const knowledgeCandidateCount = computed(() => cases.value.filter((item) => (
+  item.status === 'resolved' && item.knowledge_decision === 'include'
+)).length)
+
+function knowledgeDecisionLabel(value: WorkflowCase['knowledge_decision']): string {
+  if (value === 'include') return '进入知识候选'
+  if (value === 'exclude') return '不沉淀'
+  return '未决定'
+}
 
 function errorText(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)
@@ -209,6 +220,7 @@ onMounted(async () => {
         <div><span class="stat-icon total"><el-icon><Tickets /></el-icon></span><p>全部工单<strong>{{ cases.length }}</strong></p></div>
         <div><span class="stat-icon pending"><el-icon><Timer /></el-icon></span><p>处理中<strong>{{ pendingCount }}</strong></p></div>
         <div><span class="stat-icon resolved"><el-icon><CircleCheck /></el-icon></span><p>已解决<strong>{{ resolvedCount }}</strong></p></div>
+        <div><span class="stat-icon knowledge"><el-icon><Collection /></el-icon></span><p>知识候选<strong>{{ knowledgeCandidateCount }}</strong></p></div>
         <div><span class="stat-icon closed"><el-icon><Warning /></el-icon></span><p>其他关闭<strong>{{ closedCount }}</strong></p></div>
       </section>
 
@@ -244,6 +256,7 @@ onMounted(async () => {
           <div><dt>处理人</dt><dd>{{ selected.assignee || '未分派' }}</dd></div>
           <div><dt>创建时间</dt><dd>{{ formatDate(selected.created_at) }}</dd></div>
           <div><dt>更新时间</dt><dd>{{ formatDate(selected.updated_at) }}</dd></div>
+          <div><dt>知识沉淀</dt><dd>{{ knowledgeDecisionLabel(selected.knowledge_decision) }}</dd></div>
         </dl>
         <section class="detail-section"><h3>问题信息</h3><dl v-if="recordEntries(selected.subject).length" class="detail-record"><div v-for="item in recordEntries(selected.subject)" :key="item.key"><dt>{{ item.label }}</dt><dd>{{ item.value }}</dd></div></dl><p v-else>暂无问题信息</p></section>
         <section class="detail-section"><h3>处理上下文</h3><dl v-if="recordEntries(selected.context).length" class="detail-record"><div v-for="item in recordEntries(selected.context)" :key="item.key"><dt>{{ item.label }}</dt><dd>{{ item.value }}</dd></div></dl><p v-else>暂无处理上下文</p></section>
