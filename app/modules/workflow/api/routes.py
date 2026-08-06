@@ -5,6 +5,7 @@ from fastapi.staticfiles import StaticFiles
 from app.platform.observability.prometheus_metrics import install_prometheus
 from app.platform.security.auth import Principal, require_role
 from app.platform.security.http import configure_http_security
+from app.modules.workflow.application.service import WorkflowDispatchError, get_workflow_service
 from app.modules.workflow.domain.models import (
     CaseActionRequest,
     CaseStatus,
@@ -46,7 +47,21 @@ async def health():
 
 @app.post("/workflow/cases", status_code=status.HTTP_201_CREATED)
 async def create_case(request: CreateCaseRequest, principal: Principal = Depends(require_role("workflow"))):
-    return get_workflow_store().create_case(principal.tenant_id, request.model_dump(mode="json"), principal.key_id)
+    try:
+        return get_workflow_service().create_case(
+            principal.tenant_id,
+            request.model_dump(mode="json"),
+            principal.key_id,
+        )
+    except WorkflowDispatchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "message": "本地工单已创建，但外部流程触发失败；使用相同请求重试不会重复创建工单",
+                "case_id": exc.case_id,
+                "failures": exc.failures,
+            },
+        ) from exc
 
 
 @app.get("/workflow/cases")

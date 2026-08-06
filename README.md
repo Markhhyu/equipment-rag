@@ -33,6 +33,7 @@
 |---|---|
 | [后端模块边界](docs/backend-architecture.md) | 需要理解服务入口、业务模块和基础设施依赖方向时 |
 | [配置与密钥指南](docs/configuration.md) | 不清楚 API Key、连接地址或密码从哪里获取时 |
+| [飞书审批连接器](docs/feishu-workflow.md) | 从未解决问答自动发起飞书“设备问题处理”审批 |
 | [可观测、评测与调优指南](docs/observability.md) | 需要分析 Trace、指标或调整 RAG 参数时 |
 | [运行恢复说明](docs/durable-runtime.md) | 需要理解任务状态、Checkpoint 和失败重试时 |
 | [安全与多租户说明](docs/security.md) | 准备部署到服务器或开放给其他用户时 |
@@ -507,8 +508,9 @@ curl -N "http://127.0.0.1:8001/stream/demo-session-002"
 导入与查询服务都有 `/runs` 接口，具体请求结构以各自 Swagger 页面为准。
 
 人工复核工作流由独立 `workflow-api` 提供，默认地址为 <http://127.0.0.1:8002/docs>。问答接口只返回
-`requires_human_review`、`review_reason`、`trace_id` 和证据上下文；调用方使用这些字段创建工单。企微、钉钉、
-飞书、OA 或其他系统通过外部连接器消费标准事件并确认投递，核心服务不导入厂商 SDK，也不把厂商字段写入问答节点。
+`requires_human_review`、`review_reason`、`trace_id` 和证据上下文；调用方使用这些字段创建工单。启用飞书连接器后，
+本地工单创建成功会自动发起“设备问题处理”审批。企微、钉钉、飞书、OA 或其他系统均通过统一连接器边界接入，
+核心状态机不包含厂商字段；飞书表单映射和凭证只存在于飞书适配器及环境配置中。
 
 标准状态固定为 `pending`、`assigned`、`in_review`、`resolved`、`rejected`、`cancelled`。所有创建和动作请求
 都携带 `idempotency_key`；投递包含 `delivery_id`、重试计数、下次重试时间和 `sha256=` HMAC 签名。

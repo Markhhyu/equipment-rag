@@ -25,8 +25,20 @@ export async function apiFetch(
 
 export async function readApiError(response: Response): Promise<string> {
   try {
-    const payload = await response.json() as { detail?: string; error?: string; message?: string }
-    return payload.detail || payload.error || payload.message || `请求失败（${response.status}）`
+    const payload = await response.json() as { detail?: unknown; error?: string; message?: string }
+    if (typeof payload.detail === 'string') return payload.detail
+    if (payload.detail && typeof payload.detail === 'object') {
+      const detail = payload.detail as { message?: unknown; case_id?: unknown; failures?: unknown }
+      const failures = Array.isArray(detail.failures) ? detail.failures.filter((item): item is string => typeof item === 'string') : []
+      const parts = [
+        typeof detail.message === 'string' ? detail.message : '',
+        typeof detail.case_id === 'string' ? `工单 ${detail.case_id}` : '',
+        ...failures,
+      ]
+      const message = parts.filter(Boolean).join('；')
+      if (message) return message
+    }
+    return payload.error || payload.message || `请求失败（${response.status}）`
   } catch {
     return `请求失败（${response.status} ${response.statusText}）`
   }

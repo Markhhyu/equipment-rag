@@ -192,6 +192,17 @@ services:
   workflow-api:
     <<: *app-service
     command: ["uvicorn", "app.apps.workflow_api:app", "--host", "0.0.0.0", "--port", "8002"]
+    environment:
+      <<: *app-environment
+      FEISHU_WORKFLOW_ENABLED: ${FEISHU_WORKFLOW_ENABLED:-false}
+      FEISHU_APP_ID: ${FEISHU_APP_ID:-}
+      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:-}
+      FEISHU_APPROVAL_CODE: ${FEISHU_APPROVAL_CODE:-}
+      FEISHU_APPROVAL_INITIATOR_ID: ${FEISHU_APPROVAL_INITIATOR_ID:-}
+      FEISHU_APPROVAL_USER_ID_TYPE: ${FEISHU_APPROVAL_USER_ID_TYPE:-open_id}
+      FEISHU_APPROVAL_FORM_FIELDS_JSON: ${FEISHU_APPROVAL_FORM_FIELDS_JSON:-}
+      FEISHU_OPEN_BASE_URL: ${FEISHU_OPEN_BASE_URL:-https://open.feishu.cn}
+      FEISHU_REQUEST_TIMEOUT_SECONDS: ${FEISHU_REQUEST_TIMEOUT_SECONDS:-10}
     depends_on:
       mongo:
         condition: service_healthy

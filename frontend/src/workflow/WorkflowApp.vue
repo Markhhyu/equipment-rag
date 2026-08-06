@@ -28,6 +28,12 @@ interface WorkflowCase {
   subject: DataRecord
   context: DataRecord
   result: DataRecord
+  external_workflows?: Array<{
+    connector_type: string
+    instance_id: string
+    status: string
+    created_at: string
+  }>
   assignee: string
   created_by?: string
   created_at: string
@@ -57,6 +63,9 @@ const statusLabels: Record<CaseStatus, string> = {
 const typeLabels: Record<string, string> = {
   answer_review: '回答复核',
   equipment_issue: '设备问题',
+}
+const connectorLabels: Record<string, string> = {
+  feishu_approval: '飞书审批',
 }
 const fieldLabels: Record<string, string> = {
   question: '问题描述', title: '标题', summary: '摘要', trace_id: '问答 Trace', session_id: '会话 ID',
@@ -225,6 +234,7 @@ onMounted(async () => {
         <section class="detail-section"><h3>问题信息</h3><dl v-if="recordEntries(selected.subject).length" class="detail-record"><div v-for="item in recordEntries(selected.subject)" :key="item.key"><dt>{{ item.label }}</dt><dd>{{ item.value }}</dd></div></dl><p v-else>暂无问题信息</p></section>
         <section class="detail-section"><h3>处理上下文</h3><dl v-if="recordEntries(selected.context).length" class="detail-record"><div v-for="item in recordEntries(selected.context)" :key="item.key"><dt>{{ item.label }}</dt><dd>{{ item.value }}</dd></div></dl><p v-else>暂无处理上下文</p></section>
         <section class="detail-section"><h3>处理结果</h3><dl v-if="recordEntries(selected.result).length" class="detail-record"><div v-for="item in recordEntries(selected.result)" :key="item.key"><dt>{{ item.label }}</dt><dd>{{ item.value }}</dd></div></dl><p v-else>工单尚未形成处理结果</p></section>
+        <section class="detail-section"><h3>外部流程</h3><dl v-if="selected.external_workflows?.length" class="detail-record"><div v-for="item in selected.external_workflows" :key="`${item.connector_type}-${item.instance_id}`"><dt>{{ connectorLabels[item.connector_type] ?? item.connector_type }}</dt><dd><code>{{ item.instance_id }}</code> · {{ item.status }}</dd></div></dl><p v-else>尚未关联外部流程</p></section>
       </div>
     </el-drawer>
 

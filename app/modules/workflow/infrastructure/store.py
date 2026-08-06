@@ -81,12 +81,38 @@ class InMemoryWorkflowStore:
                 "idempotency_key": payload["idempotency_key"],
                 "assignee": "",
                 "result": {},
+                "external_workflows": [],
                 "created_by": actor,
                 "created_at": now,
                 "updated_at": now,
             }
             self.cases[(tenant_id, case["case_id"])] = case
             self._emit(tenant_id, case, "review.requested")
+            return _public(deepcopy(case))
+
+    def attach_external_workflow(
+        self,
+        tenant_id: str,
+        case_id: str,
+        connector_type: str,
+        instance_id: str,
+        external_status: str = "started",
+    ) -> dict[str, Any]:
+        with self._lock:
+            case = self.cases.get((tenant_id, case_id))
+            if not case:
+                raise KeyError(case_id)
+            references = case.setdefault("external_workflows", [])
+            if not any(item.get("connector_type") == connector_type for item in references):
+                references.append(
+                    {
+                        "connector_type": connector_type,
+                        "instance_id": instance_id,
+                        "status": external_status,
+                        "created_at": _now(),
+                    }
+                )
+                case["updated_at"] = _now()
             return _public(deepcopy(case))
 
     def get_case(self, tenant_id: str, case_id: str) -> dict[str, Any] | None:
@@ -263,6 +289,7 @@ class MongoWorkflowStore(InMemoryWorkflowStore):
             "idempotency_key": payload["idempotency_key"],
             "assignee": "",
             "result": {},
+            "external_workflows": [],
             "created_by": actor,
             "created_at": now,
             "updated_at": now,
@@ -272,6 +299,34 @@ class MongoWorkflowStore(InMemoryWorkflowStore):
         except DuplicateKeyError:
             return _public(self._case_collection.find_one(selector, {"_id": 0}) or {})
         self._emit(tenant_id, case, "review.requested")
+        return _public(case)
+
+    def attach_external_workflow(
+        self,
+        tenant_id: str,
+        case_id: str,
+        connector_type: str,
+        instance_id: str,
+        external_status: str = "started",
+    ) -> dict[str, Any]:
+        selector = {
+            "tenant_id": tenant_id,
+            "case_id": case_id,
+            "external_workflows": {"$not": {"$elemMatch": {"connector_type": connector_type}}},
+        }
+        reference = {
+            "connector_type": connector_type,
+            "instance_id": instance_id,
+            "status": external_status,
+            "created_at": _now(),
+        }
+        self._case_collection.update_one(
+            selector,
+            {"$push": {"external_workflows": reference}, "$set": {"updated_at": _now()}},
+        )
+        case = self._case_collection.find_one({"tenant_id": tenant_id, "case_id": case_id}, {"_id": 0})
+        if not case:
+            raise KeyError(case_id)
         return _public(case)
 
     def get_case(self, tenant_id: str, case_id: str) -> dict[str, Any] | None:

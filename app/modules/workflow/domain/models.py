@@ -32,6 +32,13 @@ class DeliveryStatus(StrEnum):
     FAILED = "failed"
 
 
+class ExternalWorkflowReference(BaseModel):
+    connector_type: str = Field(min_length=1, max_length=64)
+    instance_id: str = Field(min_length=1, max_length=256)
+    status: str = Field(default="started", max_length=64)
+    created_at: datetime
+
+
 class CreateCaseRequest(BaseModel):
     case_type: str = Field(default="answer_review", min_length=1, max_length=64)
     subject: dict[str, Any] = Field(default_factory=dict)
@@ -72,6 +79,7 @@ class WorkflowCase(BaseModel):
     idempotency_key: str
     assignee: str = ""
     result: dict[str, Any] = Field(default_factory=dict)
+    external_workflows: list[ExternalWorkflowReference] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
