@@ -4,19 +4,12 @@ import { Delete, Link, Lock } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { apiFetch } from '../shared/api'
 
-interface FormFieldConfig {
-  id: string
-  type: string
-  max_length: number
-}
-
 interface FeishuSettings {
   enabled: boolean
   app_id: string
   approval_code: string
   initiator_user_id: string
   user_id_type: 'open_id' | 'user_id' | 'union_id'
-  form_fields: Record<string, FormFieldConfig>
   base_url: string
   timeout_seconds: number
   secret_configured: boolean
@@ -24,27 +17,8 @@ interface FeishuSettings {
   updated_at: string | null
 }
 
-interface FieldRow {
-  source: string
-  label: string
-  id: string
-  type: string
-  max_length: number
-}
-
 const props = defineProps<{ modelValue: boolean; apiKey: string }>()
 const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>()
-
-const fieldDefinitions = [
-  ['case_id', '工单编号', 'input'],
-  ['subject.question', '问题描述', 'textarea'],
-  ['subject.device_models', '设备型号', 'input'],
-  ['subject.version_labels', '设备/文档版本', 'input'],
-  ['context.answer', '助手原回答', 'textarea'],
-  ['context.review_reason', '转人工原因', 'textarea'],
-  ['subject.trace_id', '问答 Trace ID', 'input'],
-  ['context.resolution_status', '问答处理状态', 'input'],
-] as const
 
 const loading = ref(false)
 const saving = ref(false)
@@ -62,17 +36,6 @@ const draft = reactive({
   base_url: 'https://open.feishu.cn',
   timeout_seconds: 10,
 })
-const fields = ref<FieldRow[]>(makeFieldRows())
-
-function makeFieldRows(config: Record<string, FormFieldConfig> = {}): FieldRow[] {
-  return fieldDefinitions.map(([sourcePath, label, defaultType]) => ({
-    source: sourcePath,
-    label,
-    id: config[sourcePath]?.id ?? '',
-    type: config[sourcePath]?.type ?? defaultType,
-    max_length: config[sourcePath]?.max_length ?? 2000,
-  }))
-}
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -91,7 +54,6 @@ async function load(): Promise<void> {
     draft.user_id_type = settings.user_id_type || 'open_id'
     draft.base_url = settings.base_url || 'https://open.feishu.cn'
     draft.timeout_seconds = settings.timeout_seconds || 10
-    fields.value = makeFieldRows(settings.form_fields)
     secretConfigured.value = settings.secret_configured
     source.value = settings.source
   } catch (error) {
@@ -102,11 +64,6 @@ async function load(): Promise<void> {
 }
 
 function requestBody(): Record<string, unknown> {
-  const formFields = Object.fromEntries(
-    fields.value
-      .filter((item) => item.id.trim())
-      .map((item) => [item.source, { id: item.id.trim(), type: item.type, max_length: item.max_length }]),
-  )
   return {
     ...draft,
     app_id: draft.app_id.trim(),
@@ -114,7 +71,6 @@ function requestBody(): Record<string, unknown> {
     approval_code: draft.approval_code.trim(),
     initiator_user_id: draft.initiator_user_id.trim(),
     base_url: draft.base_url.trim(),
-    form_fields: formFields,
   }
 }
 
@@ -162,7 +118,6 @@ async function clearConfig(): Promise<void> {
       enabled: false, app_id: '', app_secret: '', approval_code: '', initiator_user_id: '',
       user_id_type: 'open_id', base_url: 'https://open.feishu.cn', timeout_seconds: 10,
     })
-    fields.value = makeFieldRows()
     secretConfigured.value = false
     source.value = 'default'
     ElMessage.success('飞书配置已清除')
@@ -181,7 +136,7 @@ watch(() => props.modelValue, (opened) => {
 <template>
   <el-dialog
     :model-value="modelValue"
-    width="min(860px, calc(100vw - 28px))"
+    width="min(680px, calc(100vw - 28px))"
     title="飞书审批设置"
     destroy-on-close
     @update:model-value="emit('update:modelValue', $event)"
@@ -198,22 +153,11 @@ watch(() => props.modelValue, (opened) => {
           <span>App Secret <i :class="{ ready: secretConfigured }">{{ secretConfigured ? '已保存' : '未配置' }}</i></span>
           <el-input v-model="draft.app_secret" type="password" show-password autocomplete="new-password" placeholder="留空则保持现有密钥" />
         </label>
-        <label><span>审批定义 Code</span><el-input v-model="draft.approval_code" autocomplete="off" /></label>
+        <label><span>当前默认审批 Code</span><el-input v-model="draft.approval_code" autocomplete="off" /></label>
         <label class="initiator-field">
           <span>发起人</span>
           <div><el-select v-model="draft.user_id_type"><el-option label="Open ID" value="open_id" /><el-option label="User ID" value="user_id" /><el-option label="Union ID" value="union_id" /></el-select><el-input v-model="draft.initiator_user_id" autocomplete="off" /></div>
         </label>
-      </div>
-
-      <div class="mapping-head"><strong>表单字段映射</strong><span>{{ fields.filter((item) => item.id).length }}/{{ fields.length }}</span></div>
-      <div class="mapping-table">
-        <div class="mapping-row mapping-labels"><span>项目字段</span><span>飞书控件 ID</span><span>控件类型</span><span>长度</span></div>
-        <div v-for="item in fields" :key="item.source" class="mapping-row">
-          <span><strong>{{ item.label }}</strong><code>{{ item.source }}</code></span>
-          <el-input v-model="item.id" placeholder="控件 ID" autocomplete="off" />
-          <el-select v-model="item.type"><el-option label="单行文本" value="input" /><el-option label="多行文本" value="textarea" /></el-select>
-          <el-input-number v-model="item.max_length" :min="1" :max="10000" :controls="false" />
-        </div>
       </div>
 
       <div class="advanced-grid">
@@ -244,17 +188,10 @@ watch(() => props.modelValue, (opened) => {
 label > span { margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between; color: #667085; font-size: 11px; }
 label i { color: #a45d12; font-size: 9px; font-style: normal; }.ready { color: #14785a; }
 .initiator-field > div { display: grid; grid-template-columns: 110px 1fr; gap: 7px; }
-.mapping-head { min-height: 38px; display: flex; align-items: center; justify-content: space-between; border-top: 1px solid #e5e8ed; }
-.mapping-head strong { color: #344054; font-size: 12px; }.mapping-head span { color: #8a93a2; font-size: 10px; }
-.mapping-table { border: 1px solid #e1e5eb; border-radius: 7px; overflow: hidden; }
-.mapping-row { min-height: 51px; padding: 7px 9px; display: grid; grid-template-columns: minmax(150px, 1.1fr) minmax(180px, 1.5fr) 125px 82px; align-items: center; gap: 8px; border-bottom: 1px solid #edf0f3; }
-.mapping-row:last-child { border-bottom: 0; }.mapping-row > span { min-width: 0; }.mapping-row strong, .mapping-row code { display: block; }.mapping-row strong { color: #465166; font-size: 10px; }.mapping-row code { margin-top: 2px; overflow: hidden; color: #98a0ad; font-size: 8px; text-overflow: ellipsis; }
-.mapping-labels { min-height: 31px; color: #8a93a2; font-size: 9px; background: #f8f9fb; }
-.advanced-grid { padding-top: 16px; display: grid; grid-template-columns: 1fr 180px; gap: 18px; }
+.advanced-grid { padding-top: 2px; display: grid; grid-template-columns: 1fr 180px; gap: 18px; }
 .config-footer { width: 100%; display: flex; align-items: center; gap: 8px; }.config-footer > span { flex: 1; }
 @media (max-width: 720px) {
   .config-grid, .advanced-grid { grid-template-columns: 1fr; }
-  .mapping-table { overflow-x: auto; }.mapping-row { min-width: 690px; }
   .config-footer { flex-wrap: wrap; }.config-footer > span { display: none; }.config-footer .el-button { flex: 1; margin-left: 0; }
 }
 </style>

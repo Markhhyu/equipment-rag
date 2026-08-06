@@ -116,6 +116,21 @@ def test_feishu_connector_maps_form_and_reuses_tenant_token():
     ]
 
 
+def test_feishu_connector_allows_approval_without_prefill_mapping():
+    session = FakeSession(
+        [
+            FakeResponse({"code": 0, "tenant_access_token": "tenant-token", "expire": 7200}),
+            FakeResponse({"code": 0, "data": {"instance_code": "approval-instance-1"}}),
+        ]
+    )
+    config = FeishuApprovalConfig.from_env(config_env(FEISHU_APPROVAL_FORM_FIELDS_JSON=""))
+
+    result = FeishuApprovalConnector(config, session=session).start_case(make_case())
+
+    assert result.instance_id == "approval-instance-1"
+    assert json.loads(session.calls[1][1]["json"]["form"]) == []
+
+
 def test_feishu_connector_returns_safe_business_error():
     session = FakeSession([FakeResponse({"code": 99991663, "msg": "approval permission denied"})])
     connector = FeishuApprovalConnector(FeishuApprovalConfig.from_env(config_env()), session=session)

@@ -156,7 +156,6 @@ class FeishuApprovalConfig:
                 ("FEISHU_APP_SECRET", self.app_secret),
                 ("FEISHU_APPROVAL_CODE", self.approval_code),
                 ("FEISHU_APPROVAL_INITIATOR_ID", self.initiator_user_id),
-                ("FEISHU_APPROVAL_FORM_FIELDS_JSON", self.form_fields),
             )
             if not value
         ]

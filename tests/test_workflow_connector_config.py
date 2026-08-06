@@ -56,11 +56,13 @@ def test_blank_secret_preserves_existing_encrypted_value_and_delete_is_tenant_sc
     original = repository.get("tenant-a", "feishu_approval")["encrypted_secret"]
     changed = settings(secret="")
     changed["approval_code"] = "approval-code-v2"
+    changed.pop("form_fields")
 
     saved = service.save_feishu("tenant-a", changed, "admin-b")
 
     assert saved["approval_code"] == "approval-code-v2"
     assert repository.get("tenant-a", "feishu_approval")["encrypted_secret"] == original
+    assert repository.get("tenant-a", "feishu_approval")["config"]["form_fields"] == settings()["form_fields"]
     assert service.delete_feishu("tenant-b") is False
     assert service.delete_feishu("tenant-a") is True
     assert repository.get("tenant-a", "feishu_approval") is None

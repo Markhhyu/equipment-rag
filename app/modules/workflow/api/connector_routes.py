@@ -26,7 +26,7 @@ class FeishuConnectorSettingsRequest(BaseModel):
     approval_code: str = Field(default="", max_length=256)
     initiator_user_id: str = Field(default="", max_length=256)
     user_id_type: Literal["open_id", "user_id", "union_id"] = "open_id"
-    form_fields: dict[str, FormFieldSettings] = Field(default_factory=dict)
+    form_fields: dict[str, FormFieldSettings] | None = None
     base_url: str = Field(default="https://open.feishu.cn", max_length=512)
     timeout_seconds: int = Field(default=10, ge=1, le=120)
 

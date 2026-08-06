@@ -38,6 +38,11 @@ class ConnectorConfigService:
     def save_feishu(self, tenant_id: str, values: dict[str, Any], actor: str) -> dict[str, Any]:
         values = dict(values)
         existing = self.repository.get(tenant_id, FEISHU_CONNECTOR_TYPE)
+        if values.get("form_fields") is None:
+            existing_values = (existing or {}).get("config") or {}
+            values["form_fields"] = existing_values.get("form_fields")
+            if values["form_fields"] is None:
+                values["form_fields"] = FeishuApprovalConfig.from_env().storage_values()["form_fields"]
         submitted_secret = str(values.pop("app_secret", "") or "").strip()
         encrypted_secret = str((existing or {}).get("encrypted_secret") or "")
         if submitted_secret:
