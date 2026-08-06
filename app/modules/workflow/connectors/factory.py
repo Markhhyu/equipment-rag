@@ -1,19 +1,12 @@
 """Connector composition kept outside workflow domain and application rules."""
 
-from functools import lru_cache
-
+from app.modules.workflow.application.connector_config_service import get_connector_config_service
 from app.modules.workflow.connectors.base import WorkflowConnector
-from app.modules.workflow.connectors.feishu import FeishuApprovalConfig, FeishuApprovalConnector
 
 
-@lru_cache(maxsize=1)
-def get_enabled_workflow_connectors() -> tuple[WorkflowConnector, ...]:
-    connectors: list[WorkflowConnector] = []
-    feishu_config = FeishuApprovalConfig.from_env()
-    if feishu_config.enabled:
-        connectors.append(FeishuApprovalConnector(feishu_config))
-    return tuple(connectors)
+def get_enabled_workflow_connectors(tenant_id: str) -> tuple[WorkflowConnector, ...]:
+    return get_connector_config_service().connectors_for_tenant(tenant_id)
 
 
 def reset_workflow_connectors_for_tests() -> None:
-    get_enabled_workflow_connectors.cache_clear()
+    return None

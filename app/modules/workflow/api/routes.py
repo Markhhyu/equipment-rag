@@ -6,6 +6,7 @@ from app.platform.observability.prometheus_metrics import install_prometheus
 from app.platform.security.auth import Principal, require_role
 from app.platform.security.http import configure_http_security
 from app.modules.workflow.application.service import WorkflowDispatchError, get_workflow_service
+from app.modules.workflow.api.connector_routes import router as connector_router
 from app.modules.workflow.domain.models import (
     CaseActionRequest,
     CaseStatus,
@@ -23,6 +24,7 @@ app = FastAPI(
 )
 configure_http_security(app)
 install_prometheus(app, "workflow-api")
+app.include_router(connector_router)
 
 FRONTEND_DIST_DIR = PROJECT_ROOT / "frontend" / "dist"
 FRONTEND_ASSETS_DIR = FRONTEND_DIST_DIR / "assets"

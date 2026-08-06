@@ -108,6 +108,42 @@ class FeishuApprovalConfig:
         config.validate()
         return config
 
+    @classmethod
+    def from_values(cls, values: Mapping[str, Any], app_secret: str) -> FeishuApprovalConfig:
+        form_fields = values.get("form_fields") or {}
+        config = cls(
+            enabled=bool(values.get("enabled")),
+            app_id=str(values.get("app_id") or "").strip(),
+            app_secret=app_secret.strip(),
+            approval_code=str(values.get("approval_code") or "").strip(),
+            initiator_user_id=str(values.get("initiator_user_id") or "").strip(),
+            user_id_type=str(values.get("user_id_type") or "open_id").strip(),
+            form_fields=_parse_form_fields(json.dumps(form_fields, ensure_ascii=False)),
+            base_url=str(values.get("base_url") or "https://open.feishu.cn").strip().rstrip("/"),
+            timeout_seconds=_positive_int(str(values.get("timeout_seconds") or ""), 10),
+        )
+        config.validate()
+        return config
+
+    def storage_values(self) -> dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "app_id": self.app_id,
+            "approval_code": self.approval_code,
+            "initiator_user_id": self.initiator_user_id,
+            "user_id_type": self.user_id_type,
+            "form_fields": {
+                item.source: {
+                    "id": item.control_id,
+                    "type": item.control_type,
+                    "max_length": item.max_length,
+                }
+                for item in self.form_fields
+            },
+            "base_url": self.base_url,
+            "timeout_seconds": self.timeout_seconds,
+        }
+
     def validate(self) -> None:
         if self.user_id_type not in _USER_ID_TYPES:
             raise ValueError("FEISHU_APPROVAL_USER_ID_TYPE 仅支持 open_id、user_id 或 union_id")
@@ -179,6 +215,16 @@ class FeishuApprovalConnector:
             raise WorkflowConnectorError("飞书未返回审批实例编号")
         return StartedWorkflow(instance_id=instance_id)
 
+    def check_connection(self) -> dict[str, str]:
+        response = self._get_json(
+            f"/open-apis/approval/v4/approvals/{self.config.approval_code}",
+            headers={"Authorization": f"Bearer {self._tenant_access_token()}"},
+            params={"user_id_type": self.config.user_id_type},
+        )
+        data = response.get("data") or {}
+        name = str(data.get("approval_name") or data.get("name") or "").strip()
+        return {"approval_code": self.config.approval_code, "approval_name": name}
+
     def _build_form(self, case: WorkflowCase) -> list[dict[str, str]]:
         case_data = case.model_dump(mode="json")
         form: list[dict[str, str]] = []
@@ -220,10 +266,31 @@ class FeishuApprovalConnector:
         headers: dict[str, str] | None = None,
         params: dict[str, str] | None = None,
     ) -> dict[str, Any]:
+        return self._request_json("post", path, payload=payload, headers=headers, params=params)
+
+    def _get_json(
+        self,
+        path: str,
+        *,
+        headers: dict[str, str] | None = None,
+        params: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        return self._request_json("get", path, headers=headers, params=params)
+
+    def _request_json(
+        self,
+        method: str,
+        path: str,
+        *,
+        payload: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        params: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         try:
-            response = self.session.post(
+            request = getattr(self.session, method)
+            response = request(
                 f"{self.config.base_url}{path}",
-                json=payload,
+                **({"json": payload} if payload is not None else {}),
                 headers=headers,
                 params=params,
                 timeout=self.config.timeout_seconds,

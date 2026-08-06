@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from typing import Any, Iterable
 
 from app.modules.workflow.connectors.base import WorkflowConnector, WorkflowConnectorError
@@ -20,9 +21,15 @@ class WorkflowDispatchError(RuntimeError):
 class WorkflowService:
     """Create the local audit record first, then trigger configured external systems."""
 
-    def __init__(self, store: InMemoryWorkflowStore, connectors: Iterable[WorkflowConnector] = ()) -> None:
+    def __init__(
+        self,
+        store: InMemoryWorkflowStore,
+        connectors: Iterable[WorkflowConnector] = (),
+        connector_provider: Callable[[str], Iterable[WorkflowConnector]] | None = None,
+    ) -> None:
         self.store = store
         self.connectors = tuple(connectors)
+        self.connector_provider = connector_provider
 
     def create_case(self, tenant_id: str, payload: dict[str, Any], actor: str) -> dict[str, Any]:
         case_data = self.store.create_case(tenant_id, payload, actor)
@@ -32,7 +39,11 @@ class WorkflowService:
         failures: list[str] = []
         case = WorkflowCase.model_validate(case_data)
 
-        for connector in self.connectors:
+        try:
+            connectors = self.connector_provider(tenant_id) if self.connector_provider else self.connectors
+        except WorkflowConnectorError as exc:
+            raise WorkflowDispatchError(case.case_id, [f"connector_config: {exc}"]) from exc
+        for connector in connectors:
             if connector.connector_type in existing_types:
                 continue
             try:
@@ -65,7 +76,7 @@ def get_workflow_service() -> WorkflowService:
         if _service is None:
             from app.modules.workflow.connectors.factory import get_enabled_workflow_connectors
 
-            _service = WorkflowService(get_workflow_store(), get_enabled_workflow_connectors())
+            _service = WorkflowService(get_workflow_store(), connector_provider=get_enabled_workflow_connectors)
         return _service
 
 

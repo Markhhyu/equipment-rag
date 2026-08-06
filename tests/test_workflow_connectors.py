@@ -28,6 +28,10 @@ class FakeSession:
         self.calls.append((url, kwargs))
         return self.responses.pop(0)
 
+    def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        return self.responses.pop(0)
+
 
 def make_case() -> WorkflowCase:
     now = datetime.now(UTC)
@@ -118,6 +122,22 @@ def test_feishu_connector_returns_safe_business_error():
 
     with pytest.raises(WorkflowConnectorError, match="99991663"):
         connector.start_case(make_case())
+
+
+def test_feishu_connector_can_validate_approval_definition():
+    session = FakeSession(
+        [
+            FakeResponse({"code": 0, "tenant_access_token": "tenant-token", "expire": 7200}),
+            FakeResponse({"code": 0, "data": {"approval_name": "设备问题处理"}}),
+        ]
+    )
+    connector = FeishuApprovalConnector(FeishuApprovalConfig.from_env(config_env()), session=session)
+
+    result = connector.check_connection()
+
+    assert result == {"approval_code": "approval-code", "approval_name": "设备问题处理"}
+    assert session.calls[1][0].endswith("/open-apis/approval/v4/approvals/approval-code")
+    assert session.calls[1][1]["headers"] == {"Authorization": "Bearer tenant-token"}
 
 
 class RetryConnector:

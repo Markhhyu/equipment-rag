@@ -23,9 +23,30 @@
 审批定义编码和表单控件 ID 可以从飞书审批定义详情接口返回的表单 JSON 中取得。控件删除后重建会产生新 ID，
 因此发布后应保持 ID 稳定；只修改显示名称时也要重新验证映射。
 
-## 本地配置
+## 页面配置（推荐）
 
-把真实值写入根目录 `.env`，不要修改 `.env.example` 中的空示例：
+1. 打开 <http://127.0.0.1:8002/workflow.html>。
+2. 点击右上角“飞书设置”。
+3. 填写 App ID、App Secret、审批定义 Code 和发起人 ID。
+4. 把项目字段分别绑定到飞书表单控件 ID。
+5. 打开“启用”开关，点击“保存并测试”。
+
+保存后配置按当前租户写入 MongoDB。`APP_SECRET` 使用 Fernet 加密，页面和查询接口只显示是否已经配置，
+不会返回原文。开发环境会在 `output/workflow-config.key` 自动生成本机密钥；该目录已被 Git 忽略。
+生产环境必须配置稳定的主密钥：
+
+```powershell
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+把输出写入部署环境的 `WORKFLOW_CONFIG_ENCRYPTION_KEY`，不要提交到 Git。密钥丢失或变更后，已保存的
+`APP_SECRET` 无法恢复，只能清除连接器配置并重新填写。
+
+页面配置保存后立即生效，无需重启 `workflow-api`。只有更新后端代码或部署级主密钥时才需要重启。
+
+## 环境变量配置（兼容）
+
+没有数据库配置时，仍可把真实值写入根目录 `.env`。数据库中的页面配置优先级更高：
 
 ```env
 FEISHU_WORKFLOW_ENABLED=true
