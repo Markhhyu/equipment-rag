@@ -634,7 +634,7 @@ try {
         $mineruStarted = Start-Mineru
     }
 
-    Write-Step "构建并启动导入 API、查询 API 与工作流 API"
+    Write-Step "构建并启动统一前端、导入 API、查询 API 与工作流 API"
     $apiArgs = @(
         "compose", "--project-name", "equipment-rag", "-f", $CoreCompose,
         "up", "-d"
@@ -642,15 +642,17 @@ try {
     if (-not $SkipBuild) {
         $apiArgs += "--build"
     }
-    $apiArgs += @("import-api", "query-api", "workflow-api")
+    $apiArgs += @("import-api", "query-api", "workflow-api", "web")
     Invoke-DockerCommand -DockerArgs $apiArgs
 
     $importPort = Get-DotEnvValue -Name "IMPORT_API_PORT" -DefaultValue "8000"
     $queryPort = Get-DotEnvValue -Name "QUERY_API_PORT" -DefaultValue "8001"
     $workflowPort = Get-DotEnvValue -Name "WORKFLOW_API_PORT" -DefaultValue "8002"
+    $webPort = Get-DotEnvValue -Name "WEB_PORT" -DefaultValue "8080"
     Wait-HttpService -Name "导入 API" -Url "http://127.0.0.1:$importPort/health" -Timeout $TimeoutSeconds
     Wait-HttpService -Name "查询 API" -Url "http://127.0.0.1:$queryPort/health" -Timeout $TimeoutSeconds
     Wait-HttpService -Name "工作流 API" -Url "http://127.0.0.1:$workflowPort/health" -Timeout $TimeoutSeconds
+    Wait-HttpService -Name "统一前端" -Url "http://127.0.0.1:$webPort/healthz" -Timeout $TimeoutSeconds
     if ($mineruStarted) {
         Test-MineruFromImportApi
     }

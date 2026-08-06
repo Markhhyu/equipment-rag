@@ -16,7 +16,7 @@ import {
 import { ElMessage } from 'element-plus'
 import ApiKeyDialog from '../shared/ApiKeyDialog.vue'
 import { apiFetch } from '../shared/api'
-import { getApiKey, saveApiKey } from '../shared/storage'
+import { applicationPageUrl, getApiKey, saveApiKey } from '../shared/storage'
 
 interface Totals {
   questions: number
@@ -97,7 +97,8 @@ const settingsVisible = ref(false)
 const loading = ref(false)
 const selectedDays = ref(7)
 const summary = ref<AnalyticsSummary>(emptySummary)
-const appsUrl = '/apps.html'
+const appsUrl = applicationPageUrl('/apps', '8001', '/apps.html')
+const chatUrl = applicationPageUrl('/chat', '8001', '/chat.html')
 
 const maxTrendValue = computed(() => Math.max(1, ...summary.value.trend.map((item) => item.questions)))
 const confirmedTotal = computed(() => summary.value.totals.solved + summary.value.totals.partial + summary.value.totals.unsolved)
@@ -177,13 +178,13 @@ onMounted(loadSummary)
 <template>
   <div class="app-frame analytics-page">
     <header class="analytics-header">
-      <a class="analytics-brand" href="/chat.html">
+      <a class="analytics-brand" :href="chatUrl">
         <span class="brand-mark">EA</span>
         <span class="brand-copy"><strong>设备知识助手</strong><span>问答运营</span></span>
       </a>
       <nav class="analytics-nav">
         <a class="top-button" :href="appsUrl"><el-icon><Grid /></el-icon><span class="desktop-label">应用中心</span></a>
-        <a class="top-button" href="/chat.html"><el-icon><ChatDotRound /></el-icon><span class="desktop-label">返回问答</span></a>
+        <a class="top-button" :href="chatUrl"><el-icon><ChatDotRound /></el-icon><span class="desktop-label">返回问答</span></a>
         <button class="top-button" @click="settingsVisible = true"><el-icon><Connection /></el-icon><span class="desktop-label">API 设置</span></button>
       </nav>
     </header>

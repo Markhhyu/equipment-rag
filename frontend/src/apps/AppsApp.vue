@@ -15,6 +15,7 @@ import {
 } from '@element-plus/icons-vue'
 import { computed, type Component } from 'vue'
 import { hasAppRole, type AppRole } from '../shared/auth'
+import { applicationPageUrl } from '../shared/storage'
 
 interface AppLink {
   name: string
@@ -37,11 +38,11 @@ function serviceUrl(port: string, path = '/'): string {
 }
 
 const businessApps: AppLink[] = [
-  { name: '智能问答', description: '设备咨询', address: '8001 / chat', href: serviceUrl('8001', '/chat.html'), icon: ChatDotRound, tone: 'blue', requiredRole: 'query' },
-  { name: '知识库治理', description: '文档与版本', address: '8000 / knowledge', href: serviceUrl('8000', '/knowledge.html'), icon: Files, tone: 'green', requiredRole: 'admin' },
-  { name: '资料导入', description: '文件处理任务', address: '8000 / import', href: serviceUrl('8000', '/import.html'), icon: DocumentAdd, tone: 'amber', requiredRole: 'import' },
-  { name: '问答运营', description: '问答结果统计', address: '8001 / analytics', href: serviceUrl('8001', '/analytics.html'), icon: DataAnalysis, tone: 'red', requiredRole: 'query' },
-  { name: '人工处理', description: '工单与处理记录', address: '8002 / workflow', href: serviceUrl('8002', '/workflow.html'), icon: Tickets, tone: 'neutral', requiredRole: 'workflow' },
+  { name: '智能问答', description: '设备咨询', address: '/chat', href: applicationPageUrl('/chat', '8001', '/chat.html'), icon: ChatDotRound, tone: 'blue', requiredRole: 'query' },
+  { name: '知识库治理', description: '文档与版本', address: '/knowledge', href: applicationPageUrl('/knowledge', '8000', '/knowledge.html'), icon: Files, tone: 'green', requiredRole: 'admin' },
+  { name: '资料导入', description: '文件处理任务', address: '/import', href: applicationPageUrl('/import', '8000', '/import.html'), icon: DocumentAdd, tone: 'amber', requiredRole: 'import' },
+  { name: '问答运营', description: '问答结果统计', address: '/analytics', href: applicationPageUrl('/analytics', '8001', '/analytics.html'), icon: DataAnalysis, tone: 'red', requiredRole: 'query' },
+  { name: '人工处理', description: '工单与处理记录', address: '/workflow', href: applicationPageUrl('/workflow', '8002', '/workflow.html'), icon: Tickets, tone: 'neutral', requiredRole: 'workflow' },
 ]
 
 const componentApps: AppLink[] = [
@@ -75,7 +76,7 @@ const homeUrl = computed(() => visibleBusinessApps.value[0]?.href || '#')
         <span class="brand-mark">EA</span>
         <span class="brand-copy"><strong>设备知识助手</strong><span>应用与组件中心</span></span>
       </a>
-      <a v-if="hasAppRole('query')" class="top-button" :href="serviceUrl('8001', '/chat.html')">
+      <a v-if="hasAppRole('query')" class="top-button" :href="applicationPageUrl('/chat', '8001', '/chat.html')">
         <el-icon><ChatDotRound /></el-icon><span class="desktop-label">进入问答</span>
       </a>
     </header>

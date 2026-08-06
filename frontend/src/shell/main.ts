@@ -1,0 +1,14 @@
+import { createApp } from 'vue'
+import ElementPlus from 'element-plus'
+import 'element-plus/dist/index.css'
+import '../styles/base.css'
+import '../apps/apps.css'
+import '../chat/chat.css'
+import '../analytics/analytics.css'
+import '../import/import.css'
+import '../knowledge/knowledge.css'
+import '../workflow/workflow.css'
+import RouterApp from './RouterApp.vue'
+import { router } from './router'
+
+createApp(RouterApp).use(ElementPlus).use(router).mount('#app')

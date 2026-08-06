@@ -34,6 +34,7 @@ import { formatBytes, formatNodeName, formatTime } from '../shared/format'
 import {
   getApiKey,
   getOrCreateSessionId,
+  applicationPageUrl,
   replaceSessionId,
   saveApiKey,
   siblingServiceUrl,
@@ -187,12 +188,12 @@ const messageList = ref<HTMLElement | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
 let activeStream: AbortController | null = null
 
-const importUrl = siblingServiceUrl('8000', '/import.html')
-const knowledgeUrl = siblingServiceUrl('8000', '/knowledge.html')
-const analyticsUrl = '/analytics.html'
-const appsUrl = '/apps.html'
+const importUrl = applicationPageUrl('/import', '8000', '/import.html')
+const knowledgeUrl = applicationPageUrl('/knowledge', '8000', '/knowledge.html')
+const analyticsUrl = applicationPageUrl('/analytics', '8001', '/analytics.html')
+const appsUrl = applicationPageUrl('/apps', '8001', '/apps.html')
 const workflowCasesUrl = siblingServiceUrl('8002', '/workflow/cases')
-const workflowPageUrl = siblingServiceUrl('8002', '/workflow.html')
+const workflowPageUrl = applicationPageUrl('/workflow', '8002', '/workflow.html')
 const shortSessionId = computed(() => sessionId.value.slice(0, 8))
 const canSend = computed(() => !sending.value && (!!question.value.trim() || pendingImages.value.length > 0))
 const attachmentHint = computed(() => `每轮最多 ${attachmentConfig.value.max_files} 张，单张不超过 ${formatBytes(attachmentConfig.value.max_bytes)}`)

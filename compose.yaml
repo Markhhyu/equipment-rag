@@ -162,6 +162,22 @@ x-app-service: &app-service
     - app-logs:/app/logs
 
 services:
+  # 统一前端入口：同源提供 Vue Router 页面，并代理三个后端 API。
+  web:
+    build:
+      context: .
+      dockerfile: deploy/web/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-8080}:8080"
+    depends_on:
+      import-api:
+        condition: service_healthy
+      query-api:
+        condition: service_healthy
+      workflow-api:
+        condition: service_healthy
+
   # 文档导入 API：负责解析文件、生成向量并写入知识库。
   import-api:
     <<: *app-service

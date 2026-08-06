@@ -22,7 +22,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import ApiKeyDialog from '../shared/ApiKeyDialog.vue'
 import { apiFetch } from '../shared/api'
 import { formatBytes } from '../shared/format'
-import { getApiKey, saveApiKey, siblingServiceUrl } from '../shared/storage'
+import { applicationPageUrl, getApiKey, saveApiKey } from '../shared/storage'
 
 type DocumentStatus = 'draft' | 'active' | 'disabled'
 type VersionStatus = 'importing' | 'draft' | 'active' | 'archived' | 'failed'
@@ -95,8 +95,9 @@ const emptyUploadForm = () => ({
 const uploadForm = ref(emptyUploadForm())
 const fileInput = ref<HTMLInputElement | null>(null)
 
-const chatUrl = siblingServiceUrl('8001', '/chat.html')
-const appsUrl = '/apps.html'
+const chatUrl = applicationPageUrl('/chat', '8001', '/chat.html')
+const importUrl = applicationPageUrl('/import', '8000', '/import.html')
+const appsUrl = applicationPageUrl('/apps', '8001', '/apps.html')
 const activeCount = computed(() => documents.value.filter((item) => item.status === 'active').length)
 const draftCount = computed(() => documents.value.filter((item) => item.status === 'draft').length)
 const disabledCount = computed(() => documents.value.filter((item) => item.status === 'disabled').length)
@@ -364,7 +365,7 @@ onMounted(loadDocuments)
       </div>
       <nav>
         <a :href="appsUrl" class="top-button"><el-icon><Grid /></el-icon><span class="desktop-label">应用中心</span></a>
-        <a href="/import.html" class="top-button"><el-icon><UploadFilled /></el-icon><span class="desktop-label">快速导入</span></a>
+        <a :href="importUrl" class="top-button"><el-icon><UploadFilled /></el-icon><span class="desktop-label">快速导入</span></a>
         <a :href="chatUrl" class="top-button"><el-icon><ChatDotRound /></el-icon><span class="desktop-label">返回问答</span></a>
         <button class="top-button" @click="settingsVisible = true"><el-icon><Connection /></el-icon><span class="desktop-label">API 设置</span></button>
       </nav>

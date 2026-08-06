@@ -22,7 +22,7 @@ import ApiKeyDialog from '../shared/ApiKeyDialog.vue'
 import { apiFetch } from '../shared/api'
 import { hasAppRole } from '../shared/auth'
 import { formatBytes, formatNodeName } from '../shared/format'
-import { getApiKey, saveApiKey, siblingServiceUrl } from '../shared/storage'
+import { applicationPageUrl, getApiKey, saveApiKey } from '../shared/storage'
 
 type TaskState = 'queued' | 'uploading' | 'processing' | 'completed' | 'failed'
 
@@ -61,9 +61,9 @@ const tasks = ref<ImportTask[]>([])
 const dragActive = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 const pollTimers = new Map<string, number>()
-const chatUrl = siblingServiceUrl('8001', '/chat.html')
-const knowledgeUrl = '/knowledge.html'
-const appsUrl = '/apps.html'
+const chatUrl = applicationPageUrl('/chat', '8001', '/chat.html')
+const knowledgeUrl = applicationPageUrl('/knowledge', '8000', '/knowledge.html')
+const appsUrl = applicationPageUrl('/apps', '8001', '/apps.html')
 
 const activeCount = computed(() => tasks.value.filter((task) =>
   ['queued', 'uploading', 'processing'].includes(task.state)

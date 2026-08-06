@@ -19,7 +19,7 @@ import ApiKeyDialog from '../shared/ApiKeyDialog.vue'
 import FeishuConfigDialog from './FeishuConfigDialog.vue'
 import { apiFetch } from '../shared/api'
 import { hasAppRole } from '../shared/auth'
-import { getApiKey, saveApiKey, siblingServiceUrl } from '../shared/storage'
+import { applicationPageUrl, getApiKey, saveApiKey, siblingServiceUrl } from '../shared/storage'
 
 type CaseStatus = 'pending' | 'assigned' | 'in_review' | 'resolved' | 'rejected' | 'cancelled'
 type DataRecord = Record<string, unknown>
@@ -54,8 +54,8 @@ const selected = ref<WorkflowCase | null>(null)
 const query = ref('')
 const statusFilter = ref('')
 
-const appsUrl = siblingServiceUrl('8001', '/apps.html')
-const docsUrl = '/docs'
+const appsUrl = applicationPageUrl('/apps', '8001', '/apps.html')
+const docsUrl = siblingServiceUrl('8002', '/docs')
 const statusLabels: Record<CaseStatus, string> = {
   pending: '待分派',
   assigned: '已分派',
