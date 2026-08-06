@@ -29,6 +29,7 @@ import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import ApiKeyDialog from '../shared/ApiKeyDialog.vue'
 import { apiFetch, consumeSse, type SseMessage } from '../shared/api'
+import { hasAppRole } from '../shared/auth'
 import { formatBytes, formatNodeName, formatTime } from '../shared/format'
 import {
   getApiKey,
@@ -622,8 +623,8 @@ onBeforeUnmount(() => {
 
       <div class="sidebar-footer">
         <a :href="appsUrl" class="sidebar-link"><el-icon><Grid /></el-icon>应用与组件</a>
-        <a :href="importUrl" class="sidebar-link"><el-icon><DocumentAdd /></el-icon>知识库导入</a>
-        <a :href="knowledgeUrl" class="sidebar-link"><el-icon><Files /></el-icon>知识库治理</a>
+        <a v-if="hasAppRole('import')" :href="importUrl" class="sidebar-link"><el-icon><DocumentAdd /></el-icon>知识库导入</a>
+        <a v-if="hasAppRole('admin')" :href="knowledgeUrl" class="sidebar-link"><el-icon><Files /></el-icon>知识库治理</a>
         <a :href="analyticsUrl" class="sidebar-link"><el-icon><DataAnalysis /></el-icon>问答运营看板</a>
         <button class="sidebar-link" @click="settingsVisible = true"><el-icon><Setting /></el-icon>连接设置</button>
       </div>
@@ -765,7 +766,7 @@ onBeforeUnmount(() => {
               </div>
 
               <div
-                v-if="message.role === 'assistant' && message.traceId && message.status === 'ready' && (message.requiresHumanReview || message.resolutionStatus === 'unsolved' || message.workflowCaseId)"
+                v-if="hasAppRole('workflow') && message.role === 'assistant' && message.traceId && message.status === 'ready' && (message.requiresHumanReview || message.resolutionStatus === 'unsolved' || message.workflowCaseId)"
                 class="workflow-escalation"
               >
                 <span><el-icon><Tickets /></el-icon><span><strong>人工处理</strong><small>转交工程师或供应商继续处理</small></span></span>

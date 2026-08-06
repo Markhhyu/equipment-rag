@@ -28,6 +28,7 @@ from app.platform.runtime.run_store import get_run_store, run_owner
 from app.platform.security.auth import Principal, require_role
 from app.platform.security.config import load_security_config
 from app.platform.security.http import configure_http_security
+from app.platform.security.routes import router as auth_router
 from app.platform.security.tenancy import safe_upload_filename, tenant_object_prefix
 from app.workers.image_enrichment import start_image_enrichment_worker, stop_image_enrichment_worker
 from app.shared.paths import PROJECT_ROOT
@@ -657,6 +658,7 @@ async def retry_run(
 
 
 app.include_router(knowledge_router)
+app.include_router(auth_router)
 
 
 if __name__ == "__main__":

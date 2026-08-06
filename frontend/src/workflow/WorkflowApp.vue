@@ -18,6 +18,7 @@ import { ElMessage } from 'element-plus'
 import ApiKeyDialog from '../shared/ApiKeyDialog.vue'
 import FeishuConfigDialog from './FeishuConfigDialog.vue'
 import { apiFetch } from '../shared/api'
+import { hasAppRole } from '../shared/auth'
 import { getApiKey, saveApiKey, siblingServiceUrl } from '../shared/storage'
 
 type CaseStatus = 'pending' | 'assigned' | 'in_review' | 'resolved' | 'rejected' | 'cancelled'
@@ -183,8 +184,9 @@ onMounted(async () => {
       </a>
       <nav>
         <a class="top-button" :href="appsUrl"><el-icon><Grid /></el-icon><span class="desktop-label">应用中心</span></a>
-        <a class="top-button" :href="docsUrl" target="_blank" rel="noreferrer"><el-icon><Tickets /></el-icon><span class="desktop-label">API 文档</span></a>
+        <a v-if="hasAppRole('admin')" class="top-button" :href="docsUrl" target="_blank" rel="noreferrer"><el-icon><Tickets /></el-icon><span class="desktop-label">API 文档</span></a>
         <button
+          v-if="hasAppRole('admin')"
           class="top-button"
           type="button"
           aria-label="飞书设置"
@@ -251,6 +253,6 @@ onMounted(async () => {
     </el-drawer>
 
     <ApiKeyDialog v-model="settingsVisible" :api-key="apiKey" @save="saveSettings" />
-    <FeishuConfigDialog v-model="feishuSettingsVisible" :api-key="apiKey" />
+    <FeishuConfigDialog v-if="hasAppRole('admin')" v-model="feishuSettingsVisible" :api-key="apiKey" />
   </div>
 </template>

@@ -1,8 +1,7 @@
-import { createApp } from 'vue'
-import ElementPlus from 'element-plus'
 import 'element-plus/dist/index.css'
 import '../styles/base.css'
 import './analytics.css'
 import AnalyticsApp from './AnalyticsApp.vue'
+import { mountProtectedPage } from '../shared/bootstrap'
 
-createApp(AnalyticsApp).use(ElementPlus).mount('#app')
+mountProtectedPage(AnalyticsApp, 'query')

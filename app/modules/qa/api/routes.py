@@ -28,6 +28,7 @@ from app.platform.runtime.config import load_runtime_config
 from app.platform.runtime.run_store import RunStatus, get_run_store, run_owner
 from app.platform.security.auth import Principal, require_role
 from app.platform.security.http import configure_http_security
+from app.platform.security.routes import router as auth_router
 from app.platform.security.tenancy import scoped_session_id
 from app.platform.runtime.sse import SSEEvent, create_sse_queue, push_to_session
 from app.platform.runtime.task_progress import (
@@ -468,6 +469,7 @@ async def retry_run(
 
 app.include_router(feedback_router)
 app.include_router(session_router)
+app.include_router(auth_router)
 
 
 if __name__ == "__main__":

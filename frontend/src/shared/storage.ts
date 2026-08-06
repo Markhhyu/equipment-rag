@@ -1,5 +1,6 @@
 const API_KEY_STORAGE_KEY = 'equipment-rag-agent.api-key'
 const SESSION_STORAGE_KEY = 'equipment-rag-agent.chat-session-id'
+export const API_KEY_CHANGED_EVENT = 'equipment-rag-agent:api-key-changed'
 
 export function getApiKey(): string {
   return localStorage.getItem(API_KEY_STORAGE_KEY) ?? ''
@@ -9,6 +10,7 @@ export function saveApiKey(value: string): void {
   const normalized = value.trim()
   if (normalized) localStorage.setItem(API_KEY_STORAGE_KEY, normalized)
   else localStorage.removeItem(API_KEY_STORAGE_KEY)
+  window.dispatchEvent(new Event(API_KEY_CHANGED_EVENT))
 }
 
 export function createSessionId(): string {

@@ -35,15 +35,24 @@ Clients send the secret as `X-API-Key`. Supported roles are:
 |---|---|
 | `query` | query, stream, history, feedback, and query-run recovery |
 | `import` | file import, import status, and import-run recovery |
+| `workflow` | human-review cases, actions, and workflow delivery operations |
 | `admin` | all current API operations |
 
 Never commit `AUTH_API_KEYS_JSON` to Git. Rotate a key by adding a new identity,
 deploying it, migrating clients, and then removing the old identity.
 
-The bundled HTML pages are local development interfaces and do not implement an
-end-user login flow. Put production UIs behind the organization's identity-aware
-gateway, or replace API-key authentication with the enterprise OIDC/JWT provider
-while preserving the server-controlled `Principal` contract.
+Every browser-facing service exposes `GET /auth/me`. The bundled HTML pages call
+this endpoint before mounting a module, hide navigation entries outside the
+current role set, and show an access-denied state for direct unauthorized URLs.
+This improves least-privilege navigation but is not the final security boundary;
+all protected APIs continue to enforce roles on the server.
+
+The bundled pages still use API keys rather than an end-user login flow. Put
+production UIs behind the organization's identity-aware gateway, or replace
+API-key authentication with the enterprise OIDC/JWT provider while preserving
+the server-controlled `Principal` contract. Infrastructure consoles and Swagger
+must also be protected at the gateway or kept on private networks; hiding their
+links in the application center is not sufficient protection.
 
 ## Tenant boundaries
 

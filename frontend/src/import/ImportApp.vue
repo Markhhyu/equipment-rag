@@ -20,6 +20,7 @@ import {
 import { ElMessage } from 'element-plus'
 import ApiKeyDialog from '../shared/ApiKeyDialog.vue'
 import { apiFetch } from '../shared/api'
+import { hasAppRole } from '../shared/auth'
 import { formatBytes, formatNodeName } from '../shared/format'
 import { getApiKey, saveApiKey, siblingServiceUrl } from '../shared/storage'
 
@@ -224,8 +225,8 @@ onBeforeUnmount(() => {
       </div>
       <nav>
         <a :href="appsUrl" class="top-button"><el-icon><Grid /></el-icon><span class="desktop-label">应用中心</span></a>
-        <a :href="knowledgeUrl" class="top-button"><el-icon><Management /></el-icon><span class="desktop-label">知识库治理</span></a>
-        <a :href="chatUrl" class="top-button"><el-icon><ChatDotRound /></el-icon><span class="desktop-label">返回问答</span></a>
+        <a v-if="hasAppRole('admin')" :href="knowledgeUrl" class="top-button"><el-icon><Management /></el-icon><span class="desktop-label">知识库治理</span></a>
+        <a v-if="hasAppRole('query')" :href="chatUrl" class="top-button"><el-icon><ChatDotRound /></el-icon><span class="desktop-label">返回问答</span></a>
         <button class="top-button" @click="settingsVisible = true"><el-icon><Connection /></el-icon><span class="desktop-label">API 设置</span></button>
       </nav>
     </header>
