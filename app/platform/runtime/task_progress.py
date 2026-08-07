@@ -48,7 +48,7 @@ _NODE_NAME_TO_CN: Dict[str, str] = {
     "node_search_embedding": "切片搜索",
     "node_search_embedding_hyde": "切片搜索(假设性文档)",
     "node_multi_search": "多路搜索",
-    "node_query_kg": "查询知识图谱",
+    "node_query_router": "规划检索策略",
     "node_join": "多路搜索合并",
 }
 

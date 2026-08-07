@@ -1,10 +1,12 @@
+from typing import Literal
+
 from langgraph.graph import END, StateGraph
 
 from app.platform.observability.rag_observability import observed_graph_node
 from app.modules.qa.graph.nodes.node_answer_output import node_answer_output
 from app.modules.qa.graph.nodes.node_image_reasoning import node_image_reasoning
 from app.modules.qa.graph.nodes.node_item_name_confirm import node_item_name_confirm
-from app.modules.qa.graph.nodes.node_query_kg import node_query_kg
+from app.modules.qa.graph.nodes.node_query_router import node_query_router
 from app.modules.qa.graph.nodes.node_rerank import node_rerank
 from app.modules.qa.graph.nodes.node_rrf import node_rrf
 from app.modules.qa.graph.nodes.node_search_embedding import node_search_embedding
@@ -19,10 +21,10 @@ builder = StateGraph(QueryGraphState)
 
 builder.add_node("node_item_name_confirm", observed_graph_node("query", "node_item_name_confirm", node_item_name_confirm))
 builder.add_node("node_version_context", observed_graph_node("query", "node_version_context", node_version_context))
+builder.add_node("node_query_router", observed_graph_node("query", "node_query_router", node_query_router))
 builder.add_node("node_multi_search", lambda state: state)
 builder.add_node("node_search_embedding", observed_graph_node("query", "node_search_embedding", node_search_embedding))
 builder.add_node("node_search_embedding_hyde", observed_graph_node("query", "node_search_embedding_hyde", node_search_embedding_hyde))
-builder.add_node("node_query_kg", observed_graph_node("query", "node_query_kg", node_query_kg))
 builder.add_node("node_web_search_mcp", observed_graph_node("query", "node_web_search_mcp", node_web_search_mcp))
 builder.add_node("node_join", lambda state: state)
 builder.add_node("node_rrf", observed_graph_node("query", "node_rrf", node_rrf))
@@ -36,7 +38,7 @@ builder.add_node("node_answer_output", observed_graph_node("query", "node_answer
 builder.set_entry_point("node_item_name_confirm")
 
 
-def route_after_item_confirm(state: QueryGraphState):
+def route_after_item_confirm(state: QueryGraphState) -> Literal["node_answer_output", "node_version_context"]:
     if state.get("answer"):
         return "node_answer_output"
     return "node_version_context"
@@ -45,23 +47,22 @@ def route_after_item_confirm(state: QueryGraphState):
 builder.add_conditional_edges("node_item_name_confirm", route_after_item_confirm)
 
 
-def route_after_version_context(state: QueryGraphState):
+def route_after_version_context(state: QueryGraphState) -> Literal["node_answer_output", "node_query_router"]:
     if state.get("answer"):
         return "node_answer_output"
-    return "node_multi_search"
+    return "node_query_router"
 
 
 builder.add_conditional_edges("node_version_context", route_after_version_context)
+builder.add_edge("node_query_router", "node_multi_search")
 
 builder.add_edge("node_multi_search", "node_search_embedding")
 builder.add_edge("node_multi_search", "node_search_embedding_hyde")
 builder.add_edge("node_multi_search", "node_web_search_mcp")
-builder.add_edge("node_multi_search", "node_query_kg")
 
 builder.add_edge("node_search_embedding", "node_join")
 builder.add_edge("node_search_embedding_hyde", "node_join")
 builder.add_edge("node_web_search_mcp", "node_join")
-builder.add_edge("node_query_kg", "node_join")
 
 builder.add_edge("node_join", "node_rrf")
 builder.add_edge("node_rrf", "node_rerank")

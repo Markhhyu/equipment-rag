@@ -31,6 +31,11 @@ def _get_score(name: str, default: float) -> float:
         return default
 
 
+def _get_choice(name: str, default: str, allowed: set[str]) -> str:
+    value = str(os.getenv(name, default)).strip().casefold()
+    return value if value in allowed else default
+
+
 @dataclass(frozen=True)
 class RagTuningConfig:
     """影响解析、召回、融合和重排效果的集中配置。
@@ -49,6 +54,8 @@ class RagTuningConfig:
     rrf_max_results: int
     rrf_embedding_weight: float
     rrf_hyde_weight: float
+    hyde_mode: str
+    web_search_mode: str
     rerank_max_topk: int
     rerank_min_topk: int
     rerank_gap_ratio: float
@@ -102,6 +109,8 @@ def load_rag_tuning_config() -> RagTuningConfig:
         rrf_max_results=_get_int("RAG_RRF_MAX_RESULTS", 10),
         rrf_embedding_weight=_get_float("RAG_RRF_EMBEDDING_WEIGHT", 1.0),
         rrf_hyde_weight=_get_float("RAG_RRF_HYDE_WEIGHT", 1.0),
+        hyde_mode=_get_choice("RAG_HYDE_MODE", "adaptive", {"adaptive", "always", "disabled"}),
+        web_search_mode=_get_choice("RAG_WEB_SEARCH_MODE", "explicit", {"explicit", "always", "disabled"}),
         rerank_max_topk=rerank_max,
         rerank_min_topk=rerank_min,
         rerank_gap_ratio=_get_float("RAG_RERANK_GAP_RATIO", 0.25),

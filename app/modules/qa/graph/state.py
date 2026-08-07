@@ -27,6 +27,7 @@ class QueryGraphState(TypedDict, total=False):
     reset_version_context: bool
     query_revision_ids: List[str]
     selected_version_context: List[Dict[str, Any]]
+    retrieval_plan: Dict[str, Any]
 
     # 设备或商品识别结果。
     item_names: List[str]
@@ -38,7 +39,6 @@ class QueryGraphState(TypedDict, total=False):
     embedding_chunks: list
     hyde_embedding_chunks: list
     hyde_doc: str
-    kg_chunks: list
     web_search_docs: list
 
     # 排序结果。

@@ -127,6 +127,11 @@ def node_search_embedding_hyde(state):
     add_running_task(state["session_id"], node_name, state.get("is_stream"))
 
     try:
+        retrieval_plan = state.get("retrieval_plan")
+        if isinstance(retrieval_plan, dict) and not retrieval_plan.get("use_hyde", False):
+            logger.info(f"检索计划跳过HyDE：query_type={retrieval_plan.get('query_type') or 'unknown'}")
+            return {"hyde_embedding_chunks": [], "hyde_doc": ""}
+
         query = (state.get("rewritten_query") or state.get("original_query") or "").strip()
         if not query:
             logger.warning("用户问题为空，跳过HyDE检索")

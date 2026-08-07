@@ -127,11 +127,10 @@ node_md_img → node_document_split → node_item_name_recognition
 
 ```text
 node_item_name_confirm
-  → node_multi_search
+  → node_version_context → node_query_router → node_multi_search
       ├─ node_search_embedding
       ├─ node_search_embedding_hyde
-      ├─ node_web_search_mcp
-      └─ node_query_kg（预留）
+      └─ node_web_search_mcp
   → node_join → node_rrf → node_rerank
   → node_image_reasoning → node_answer_output → END
 ```
@@ -404,6 +403,7 @@ CHAT_ATTACHMENT_ALLOWED_CONTENT_TYPES=image/jpeg,image/png,image/webp
 | 提高初始召回 | `RAG_RETRIEVAL_CANDIDATE_LIMIT` | 增大可能提高 Recall，也会增加耗时 |
 | 平衡语义与关键词 | `RAG_DENSE_WEIGHT`、`RAG_SPARSE_WEIGHT` | 型号/错误码通常更依赖 Sparse |
 | 调整两路检索 | `RAG_RRF_EMBEDDING_WEIGHT`、`RAG_RRF_HYDE_WEIGHT` | HyDE 偏题时可降低其权重 |
+| 控制检索路由 | `RAG_HYDE_MODE`、`RAG_WEB_SEARCH_MODE` | 默认仅为模糊故障启用HyDE、明确要求外部资料时联网 |
 | 控制精排截断 | `RAG_RERANK_MIN_TOPK`、`RAG_RERANK_MAX_TOPK`、`RAG_RERANK_GAP_*` | 影响证据数量、Token 和噪声 |
 | 控制型号确认 | `RAG_ITEM_NAME_AUTO_CONFIRM_SCORE`、`RAG_ITEM_NAME_AUTO_CONFIRM_MARGIN`、`RAG_ITEM_NAME_CANDIDATE_SCORE` | 越保守越不容易选错，但澄清次数增加 |
 

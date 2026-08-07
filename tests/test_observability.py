@@ -89,6 +89,12 @@ def test_query_quality_report_exposes_retrieval_overlap_rank_and_citation():
             {"chunk_id": "1", "text": "压力检查", "score": 0.6},
         ],
         "answer": "请先检查压力和阀门。[chunk:2]",
+        "retrieval_plan": {
+            "query_type": "troubleshooting",
+            "use_local": True,
+            "use_hyde": True,
+            "use_web": False,
+        },
     }
 
     report = analyze_query_state(state)
@@ -97,6 +103,12 @@ def test_query_quality_report_exposes_retrieval_overlap_rank_and_citation():
     assert report["retrieval"]["embedding_hyde_overlap_count"] == 1
     assert report["retrieval"]["rerank_top1_gap"] == 0.3
     assert report["response"]["has_citation"] is True
+    assert report["routing"] == {
+        "query_type": "troubleshooting",
+        "use_local": True,
+        "use_hyde": True,
+        "use_web": False,
+    }
 
 
 def test_stage_metrics_never_returns_document_content_or_vectors():

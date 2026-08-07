@@ -233,7 +233,7 @@ def analyze_query_state(state: dict) -> dict:
     embedding = list(state.get("embedding_chunks") or [])
     hyde = list(state.get("hyde_embedding_chunks") or [])
     web = list(state.get("web_search_docs") or [])
-    kg = list(state.get("kg_chunks") or [])
+    plan = state.get("retrieval_plan") if isinstance(state.get("retrieval_plan"), dict) else {}
     rrf = list(state.get("rrf_chunks") or [])
     reranked = list(state.get("reranked_docs") or [])
     answer = str(state.get("answer") or "").strip()
@@ -252,7 +252,6 @@ def analyze_query_state(state: dict) -> dict:
         "embedding_count": len(embedding),
         "hyde_count": len(hyde),
         "web_count": len(web),
-        "kg_count": len(kg),
         "unique_local_candidates": len(embedding_ids | hyde_ids),
         "embedding_hyde_overlap_count": len(overlap),
         "embedding_hyde_overlap_ratio": _ratio(len(overlap), len(embedding_ids | hyde_ids)),
@@ -289,6 +288,12 @@ def analyze_query_state(state: dict) -> dict:
 
     return {
         "quality_proxy_score": _round(fmean(checks)) if checks else 0.0,
+        "routing": {
+            "query_type": str(plan.get("query_type") or "legacy"),
+            "use_local": bool(plan.get("use_local", True)),
+            "use_hyde": bool(plan.get("use_hyde", True)),
+            "use_web": bool(plan.get("use_web", True)),
+        },
         "retrieval": retrieval,
         "response": response,
         "recommendations": recommendations,
@@ -336,11 +341,12 @@ def stage_metrics(kind: str, node_name: str, state: dict) -> dict:
             "rewritten_query_chars": len(str(state.get("rewritten_query") or "")),
             "early_answer": bool(state.get("answer")),
         }
+    if node_name == "node_query_router":
+        return report["routing"]
     mapping = {
         "node_search_embedding": {"result_count": report["retrieval"]["embedding_count"]},
         "node_search_embedding_hyde": {"result_count": report["retrieval"]["hyde_count"]},
         "node_web_search_mcp": {"result_count": report["retrieval"]["web_count"]},
-        "node_query_kg": {"result_count": report["retrieval"]["kg_count"]},
         "node_rrf": {"result_count": report["retrieval"]["rrf_count"]},
         "node_rerank": {
             "result_count": report["retrieval"]["reranked_count"],

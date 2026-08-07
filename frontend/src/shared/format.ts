@@ -1,9 +1,10 @@
 const NODE_LABELS: Record<string, string> = {
   node_item_name_confirm: '确认设备型号',
+  node_version_context: '确认文档版本',
+  node_query_router: '规划检索策略',
   node_search_embedding: '检索知识库',
   node_search_embedding_hyde: '扩展检索问题',
   node_web_search_mcp: '补充外部资料',
-  node_query_kg: '查询知识图谱',
   node_rrf: '融合检索结果',
   node_rerank: '重排参考资料',
   node_image_reasoning: '分析相关图片',

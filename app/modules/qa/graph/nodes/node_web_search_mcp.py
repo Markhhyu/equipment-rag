@@ -110,6 +110,12 @@ def node_web_search_mcp(state):
     # 1. 标记任务开始
     add_running_task(state["session_id"], sys._getframe().f_code.co_name, state.get("is_stream"))
 
+    retrieval_plan = state.get("retrieval_plan")
+    if isinstance(retrieval_plan, dict) and not retrieval_plan.get("use_web", False):
+        logger.info(f"检索计划跳过联网搜索：query_type={retrieval_plan.get('query_type') or 'unknown'}")
+        add_done_task(state["session_id"], sys._getframe().f_code.co_name, state.get("is_stream"))
+        return {"web_search_docs": []}
+
     # 2. 获取查询词
     query = state.get("rewritten_query", "")
     if not query:
@@ -190,10 +196,8 @@ def node_web_search_mcp(state):
 
     logger.info("---node_web_search_mcp 处理结束---")
 
-    # 若有有效搜索结果，返回结果供后续节点使用；无则返回空字典
-    if docs:
-        return {"web_search_docs": docs}
-    return {}
+    # 始终显式覆盖本轮结果，避免Checkpoint会话复用上一轮联网证据。
+    return {"web_search_docs": docs}
 
 
 if __name__ == "__main__":
