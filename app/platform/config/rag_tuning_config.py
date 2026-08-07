@@ -83,7 +83,8 @@ def load_rag_tuning_config() -> RagTuningConfig:
         dense_weight, sparse_weight = 0.8, 0.2
 
     rerank_max = _get_int("RAG_RERANK_MAX_TOPK", 10)
-    rerank_min = min(_get_int("RAG_RERANK_MIN_TOPK", 1), rerank_max)
+    # 参数、规格和安全步骤经常分布在相邻切片中，至少保留两条证据，避免单片段缺口诱发补造。
+    rerank_min = min(_get_int("RAG_RERANK_MIN_TOPK", 2), rerank_max)
     chunk_max = _get_int("RAG_CHUNK_MAX_CHARS", 2000, minimum=100)
     chunk_min = min(_get_int("RAG_CHUNK_MIN_CHARS", 500, minimum=1), chunk_max)
 

@@ -64,6 +64,14 @@ def test_invalid_route_configuration_uses_safe_defaults(monkeypatch):
     assert config.web_search_mode == "explicit"
 
 
+def test_default_rerank_min_topk_preserves_multiple_evidence_chunks(monkeypatch):
+    monkeypatch.delenv("RAG_RERANK_MIN_TOPK", raising=False)
+
+    config = load_rag_tuning_config()
+
+    assert config.rerank_min_topk == 2
+
+
 def test_hyde_node_clears_previous_result_when_plan_skips_branch(monkeypatch):
     monkeypatch.setattr(
         node_search_embedding_hyde,

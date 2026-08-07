@@ -54,6 +54,24 @@ def test_normal_question_keeps_dynamic_text_topk(monkeypatch):
     assert [document["chunk_id"] for document in result] == ["text-top1"]
 
 
+def test_minimum_two_evidence_chunks_survive_score_cliff(monkeypatch):
+    """复合参数可能跨切片分布，默认门槛应阻止分数断崖把上下文截成单条证据。"""
+    monkeypatch.setattr(node_rerank, "RERANK_MAX_TOPK", 5)
+    monkeypatch.setattr(node_rerank, "RERANK_MIN_TOPK", 2)
+    monkeypatch.setattr(node_rerank, "RERANK_GAP_ABS", 0.5)
+    monkeypatch.setattr(node_rerank, "RERANK_GAP_RATIO", 0.25)
+
+    scored_docs = [
+        _scored_doc("symbol", 1.98),
+        _scored_doc("specification", 0.75),
+        _scored_doc("unrelated", 0.10),
+    ]
+
+    result = node_rerank.step_3_topk(scored_docs)
+
+    assert [document["chunk_id"] for document in result] == ["symbol", "specification"]
+
+
 def test_final_image_fields_are_part_of_langgraph_state():
     """答案节点生成的MinIO引用和签名URL必须能通过LangGraph最终状态返回给API。"""
     assert "image_object_refs" in QueryGraphState.__annotations__
