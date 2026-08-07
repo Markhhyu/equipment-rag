@@ -45,7 +45,7 @@ def configure_http_security(app: FastAPI) -> None:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(config.cors_allowed_origins),
-        allow_credentials=False,
+        allow_credentials=config.auth_mode == "password",
         allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "X-API-Key", "X-Request-ID"],
         expose_headers=["X-Request-ID"],

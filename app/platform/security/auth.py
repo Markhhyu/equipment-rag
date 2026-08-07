@@ -4,13 +4,15 @@ import hmac
 from dataclasses import dataclass
 from typing import Annotated, Callable
 
-from fastapi import Depends, HTTPException, Security, status
+from fastapi import Cookie, Depends, HTTPException, Security, status
 from fastapi.security import APIKeyHeader
 
 from app.platform.security.config import load_security_config
+from app.platform.security import user_store
 
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+SESSION_COOKIE_NAME = "equipment_session"
 
 
 @dataclass(frozen=True)
@@ -21,6 +23,8 @@ class Principal:
     tenant_id: str
     roles: frozenset[str]
     authenticated: bool
+    email: str = ""
+    auth_type: str = "api_key"
 
     def has_role(self, role: str) -> bool:
         return "admin" in self.roles or role in self.roles
@@ -28,8 +32,9 @@ class Principal:
 
 async def authenticate(
     supplied_key: Annotated[str | None, Security(api_key_header)] = None,
+    session_token: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
 ) -> Principal:
-    """验证 API Key；仅在显式关闭认证的开发环境中返回本地管理员。"""
+    """验证用户会话或 API Key；开发模式可显式关闭认证。"""
     config = load_security_config()
     if config.auth_mode == "disabled":
         # 该分支便于本地上手；生产环境会在加载配置时强制启用 API Key。
@@ -38,31 +43,41 @@ async def authenticate(
             tenant_id="local",
             roles=frozenset({"admin", "query", "import", "workflow"}),
             authenticated=False,
+            auth_type="development",
         )
 
-    if not supplied_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing API key",
-            headers={"WWW-Authenticate": "ApiKey"},
-        )
+    if supplied_key:
+        matched = None
+        # 使用恒定时间比较降低根据响应耗时推测密钥内容的风险。
+        for identity in config.api_keys:
+            if hmac.compare_digest(supplied_key, identity.secret):
+                matched = identity
+        if matched is not None:
+            return Principal(
+                key_id=matched.key_id,
+                tenant_id=matched.tenant_id,
+                roles=matched.roles,
+                authenticated=True,
+                auth_type="api_key",
+            )
 
-    matched = None
-    # 使用恒定时间比较降低根据响应耗时推测密钥内容的风险。
-    for identity in config.api_keys:
-        if hmac.compare_digest(supplied_key, identity.secret):
-            matched = identity
-    if matched is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid API key",
-            headers={"WWW-Authenticate": "ApiKey"},
-        )
-    return Principal(
-        key_id=matched.key_id,
-        tenant_id=matched.tenant_id,
-        roles=matched.roles,
-        authenticated=True,
+    if config.auth_mode == "password" and session_token:
+        user = user_store.get_user_store().find_user_by_session(session_token)
+        if user:
+            return Principal(
+                key_id=str(user["user_id"]),
+                tenant_id=str(user["tenant_id"]),
+                roles=frozenset(str(role) for role in user["roles"]),
+                authenticated=True,
+                email=str(user["email"]),
+                auth_type="password",
+            )
+
+    challenge = "ApiKey" if config.auth_mode == "api_key" else "Session"
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid or missing credentials",
+        headers={"WWW-Authenticate": challenge},
     )
 
 

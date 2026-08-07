@@ -116,6 +116,21 @@ AUTH_API_KEYS_JSON=[{"id":"factory-a-admin","key":"替换为上面生成的密�
 各前端页面会先请求同源的 `/auth/me`，根据返回的租户和角色决定是否进入模块，并过滤应用中心入口。
 直接访问没有角色权限的页面会显示拒绝访问，但真正的授权仍由后端接口执行。
 
+独立线上部署也可以启用邮箱账号：
+
+```env
+APP_ENVIRONMENT=production
+AUTH_MODE=password
+AUTH_REGISTRATION_ENABLED=true
+AUTH_REGISTRATION_TENANT_ID=public
+AUTH_SESSION_TTL_SECONDS=604800
+AUTH_COOKIE_SECURE=true
+```
+
+公开注册用户固定获得 `query` 角色，不能从注册请求指定角色或租户。浏览器使用 HttpOnly 会话 Cookie，
+已配置的 API Key 仍可供自动任务使用。公开互联网部署还应在网关配置限流和机器人防护，并在邮件验证
+功能接入后再面向不受控用户开放注册。
+
 调用示例：
 
 ```powershell

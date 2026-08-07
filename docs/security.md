@@ -49,12 +49,32 @@ allows the browser credential to be replaced or cleared without exposing it.
 This improves least-privilege navigation but is not the final security boundary;
 all protected APIs continue to enforce roles on the server.
 
-The bundled pages still use API keys rather than an end-user login flow. Put
-production UIs behind the organization's identity-aware gateway, or replace
-API-key authentication with the enterprise OIDC/JWT provider while preserving
-the server-controlled `Principal` contract. Infrastructure consoles and Swagger
-must also be protected at the gateway or kept on private networks; hiding their
-links in the application center is not sufficient protection.
+For a standalone deployment, `AUTH_MODE=password` enables email registration and
+login backed by MongoDB. Passwords use salted scrypt hashes. Browser sessions use
+an HttpOnly, SameSite cookie, while MongoDB stores only a hash of the random
+session token. Public registration is separately controlled and always creates a
+least-privilege `query` user in the configured registration tenant:
+
+```dotenv
+APP_ENVIRONMENT=production
+AUTH_MODE=password
+AUTH_REGISTRATION_ENABLED=true
+AUTH_REGISTRATION_TENANT_ID=public
+AUTH_SESSION_TTL_SECONDS=604800
+AUTH_COOKIE_SECURE=true
+CORS_ALLOWED_ORIGINS=https://agent.example.com
+```
+
+API keys remain available in password mode for service-to-service automation.
+An enterprise deployment can later replace password authentication with its
+OIDC or identity-aware gateway while preserving the server-controlled
+`Principal` contract. Infrastructure consoles and Swagger must also be protected
+at the gateway or kept on private networks; hiding their links is insufficient.
+
+Open registration does not yet prove ownership of the submitted address. Before
+advertising a deployment on the public Internet, connect the planned email
+verification provider and add gateway-level bot protection. Until then, keep
+registration limited to a controlled audience or disabled.
 
 ## Tenant boundaries
 

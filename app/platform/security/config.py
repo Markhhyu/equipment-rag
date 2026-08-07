@@ -51,6 +51,10 @@ class SecurityConfig:
     environment: str
     auth_mode: str
     api_keys: tuple[ApiKeyIdentity, ...]
+    registration_enabled: bool
+    registration_tenant_id: str
+    session_ttl_seconds: int
+    session_cookie_secure: bool
     cors_allowed_origins: tuple[str, ...]
     minio_public_read: bool
     minio_presigned_url_ttl_seconds: int
@@ -113,8 +117,8 @@ def load_security_config() -> SecurityConfig:
     """加载一次安全配置并缓存，避免每个请求重复解析密钥 JSON。"""
     environment = (os.getenv("APP_ENVIRONMENT") or "development").strip().lower()
     auth_mode = (os.getenv("AUTH_MODE") or "disabled").strip().lower()
-    if auth_mode not in {"disabled", "api_key"}:
-        raise ValueError("AUTH_MODE must be 'disabled' or 'api_key'")
+    if auth_mode not in {"disabled", "api_key", "password"}:
+        raise ValueError("AUTH_MODE must be 'disabled', 'api_key', or 'password'")
 
     api_keys = _parse_api_keys(os.getenv("AUTH_API_KEYS_JSON") or "")
     cors_origins = _csv(
@@ -131,10 +135,21 @@ def load_security_config() -> SecurityConfig:
         extension if extension.startswith(".") else f".{extension}"
         for extension in _csv("ALLOWED_UPLOAD_EXTENSIONS", ".pdf,.md")
     )
+    registration_tenant_id = (os.getenv("AUTH_REGISTRATION_TENANT_ID") or "public").strip()
+    if not _TENANT_PATTERN.fullmatch(registration_tenant_id):
+        raise ValueError("Invalid AUTH_REGISTRATION_TENANT_ID")
+    registration_enabled = _as_bool("AUTH_REGISTRATION_ENABLED", False)
+    if registration_enabled and auth_mode != "password":
+        raise ValueError("AUTH_REGISTRATION_ENABLED requires AUTH_MODE=password")
+
     config = SecurityConfig(
         environment=environment,
         auth_mode=auth_mode,
         api_keys=api_keys,
+        registration_enabled=registration_enabled,
+        registration_tenant_id=registration_tenant_id,
+        session_ttl_seconds=_positive_int("AUTH_SESSION_TTL_SECONDS", 7 * 24 * 60 * 60),
+        session_cookie_secure=_as_bool("AUTH_COOKIE_SECURE", environment in {"prod", "production"}),
         cors_allowed_origins=cors_origins,
         minio_public_read=_as_bool("MINIO_PUBLIC_READ", False),
         minio_presigned_url_ttl_seconds=_positive_int("MINIO_PRESIGNED_URL_TTL_SECONDS", 3600),
@@ -145,8 +160,10 @@ def load_security_config() -> SecurityConfig:
     # 安全配置采用“失败即关闭”策略：生产环境不满足要求时拒绝启动。
     if config.auth_mode == "api_key" and not config.api_keys:
         raise ValueError("AUTH_MODE=api_key requires at least one AUTH_API_KEYS_JSON entry")
-    if config.production and config.auth_mode != "api_key":
-        raise ValueError("Production startup requires AUTH_MODE=api_key")
+    if config.production and config.auth_mode == "disabled":
+        raise ValueError("Production startup requires AUTH_MODE=api_key or AUTH_MODE=password")
+    if config.production and config.auth_mode == "password" and not config.session_cookie_secure:
+        raise ValueError("Production password authentication requires AUTH_COOKIE_SECURE=true")
     if config.production and config.minio_public_read:
         raise ValueError("Production startup requires MINIO_PUBLIC_READ=false")
     return config

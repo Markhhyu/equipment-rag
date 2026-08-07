@@ -14,10 +14,12 @@ import {
   TrendCharts,
   Tickets,
   User,
+  SwitchButton,
 } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import { computed, ref, type Component } from 'vue'
 import ApiKeyDialog from '../shared/ApiKeyDialog.vue'
-import { authState, hasAppRole, type AppRole } from '../shared/auth'
+import { authState, hasAppRole, logoutCurrentPrincipal, type AppRole } from '../shared/auth'
 import { applicationPageUrl, directServiceUrl, getApiKey, saveApiKey } from '../shared/storage'
 
 interface AppLink {
@@ -64,7 +66,7 @@ const homeUrl = computed(() => visibleBusinessApps.value[0]?.href || '#')
 const settingsVisible = ref(false)
 const apiKey = ref(getApiKey())
 const identityName = computed(() => authState.principal?.authenticated
-  ? authState.principal.key_id
+  ? (authState.principal.email || authState.principal.key_id)
   : '本地开发')
 const tenantName = computed(() => authState.principal?.tenant_id || '未连接')
 const identityTitle = computed(() => {
@@ -76,6 +78,15 @@ const identityTitle = computed(() => {
 function saveSettings(value: string): void {
   saveApiKey(value)
   apiKey.value = value.trim()
+}
+
+async function logout(): Promise<void> {
+  try {
+    await logoutCurrentPrincipal()
+    window.location.href = '/login'
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : String(error))
+  }
 }
 </script>
 
@@ -94,8 +105,11 @@ function saveSettings(value: string): void {
         <a v-if="hasAppRole('query')" class="top-button" :href="applicationPageUrl('/chat', '8001', '/chat.html')">
           <el-icon><ChatDotRound /></el-icon><span class="desktop-label">进入问答</span>
         </a>
-        <button class="top-button" type="button" title="连接设置" aria-label="连接设置" @click="settingsVisible = true">
+        <button v-if="authState.principal?.auth_type !== 'password'" class="top-button" type="button" title="连接设置" aria-label="连接设置" @click="settingsVisible = true">
           <el-icon><Connection /></el-icon><span class="desktop-label">连接设置</span>
+        </button>
+        <button v-else class="top-button" type="button" title="退出登录" aria-label="退出登录" @click="logout">
+          <el-icon><SwitchButton /></el-icon><span class="desktop-label">退出</span>
         </button>
       </div>
     </header>

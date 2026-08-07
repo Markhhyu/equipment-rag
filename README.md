@@ -339,7 +339,7 @@ docker compose up -d --force-recreate import-api query-api
 | PDF 解析 | `MINERU_API_BASE_URL`、`MINERU_BACKEND` | 仅 PDF 必需 | Markdown 导入不需要 MinerU |
 | 联网搜索 | `MCP_DASHSCOPE_*` | 可选 | 不使用时让 Base URL 保持为空 |
 | Trace | `LANGFUSE_*` | 可选 | 关闭时不需要 Public/Secret Key |
-| 生产鉴权 | `APP_ENVIRONMENT`、`AUTH_MODE`、`AUTH_API_KEYS_JSON` | 生产必需 | 详见安全文档 |
+| 生产鉴权 | `APP_ENVIRONMENT`、`AUTH_MODE`、`AUTH_API_KEYS_JSON`、`AUTH_REGISTRATION_ENABLED` | 生产必需 | 支持 API Key 或邮箱账号，详见安全文档 |
 
 ### Docker 地址规则
 
@@ -745,7 +745,7 @@ BGE-M3 与 Reranker 第一次加载需要下载并初始化模型。模型会保
 
 ## 生产部署提醒
 
-- 设置 `APP_ENVIRONMENT=production` 和 `AUTH_MODE=api_key`；
+- 设置 `APP_ENVIRONMENT=production`，并选择 `AUTH_MODE=api_key` 或 `AUTH_MODE=password`；
 - 为不同工厂或客户分配不同 `tenant_id`；
 - 更换 MongoDB、MinIO、Grafana 和 Langfuse 的本地默认密码；
 - 保持 `MINIO_PUBLIC_READ=false`，通过 HTTPS 域名提供短期签名 URL；

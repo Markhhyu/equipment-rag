@@ -22,6 +22,8 @@ export const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/', redirect: '/apps' },
+    { path: '/login', component: () => import('../auth/AuthApp.vue') },
+    { path: '/register', component: () => import('../auth/AuthApp.vue') },
     protectedRoute('/apps', () => import('../apps/AppsApp.vue')),
     protectedRoute('/chat', () => import('../chat/ChatApp.vue'), 'query'),
     protectedRoute('/analytics', () => import('../analytics/AnalyticsApp.vue'), 'query'),

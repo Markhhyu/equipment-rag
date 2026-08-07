@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [vue()],
   server: {
     proxy: {
-      '^/auth/me$': 'http://127.0.0.1:8001',
+      '^/auth/': 'http://127.0.0.1:8001',
       '^/(query|feedback|resolution)$': 'http://127.0.0.1:8001',
       '^/(attachments|history|runs|analytics|stream)/': 'http://127.0.0.1:8001',
       '^/upload$': 'http://127.0.0.1:8000',

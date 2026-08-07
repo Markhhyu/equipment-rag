@@ -16,6 +16,8 @@ const allowed = computed(() => Boolean(
   authState.principal && (!props.requiredRole || hasAppRole(props.requiredRole)),
 ))
 const forbidden = computed(() => Boolean(authState.principal && !allowed.value))
+const passwordLoginEnabled = computed(() => Boolean(authState.config?.password_login_enabled))
+const loginUrl = computed(() => `/login?redirect=${encodeURIComponent(window.location.pathname + window.location.search)}`)
 
 async function refreshAccess(): Promise<void> {
   apiKey.value = getApiKey()
@@ -53,10 +55,17 @@ onBeforeUnmount(() => window.removeEventListener(API_KEY_CHANGED_EVENT, handleAp
         <p>当前身份不具备此模块所需角色。</p>
       </template>
       <template v-else>
-        <h1>需要连接凭据</h1>
-        <p>{{ authState.error || '请输入有效的 API Key 后继续。' }}</p>
+        <h1>{{ passwordLoginEnabled ? '请登录后继续' : '需要连接凭据' }}</h1>
+        <p>{{ passwordLoginEnabled ? '当前页面需要有效账号。' : (authState.error || '请输入有效的 API Key 后继续。') }}</p>
       </template>
-      <button v-if="!authState.loading" type="button" @click="settingsVisible = true">
+      <a v-if="!authState.loading && forbidden && passwordLoginEnabled" class="access-primary" href="/apps">
+        返回应用中心
+      </a>
+      <a v-else-if="!authState.loading && passwordLoginEnabled" class="access-primary" :href="loginUrl">
+        <el-icon><Connection /></el-icon>
+        登录账号
+      </a>
+      <button v-if="!authState.loading && !passwordLoginEnabled" type="button" @click="settingsVisible = true">
         <el-icon><Warning v-if="forbidden" /><Connection v-else /></el-icon>
         更换连接凭据
       </button>
@@ -72,4 +81,5 @@ onBeforeUnmount(() => window.removeEventListener(API_KEY_CHANGED_EVENT, handleAp
 .access-panel h1 { margin: 0; color: #1f2937; font-size: 20px; letter-spacing: 0; }
 .access-panel p { min-height: 40px; margin: 10px 0 20px; color: #667085; font-size: 13px; line-height: 1.6; }
 .access-panel button { min-height: 38px; padding: 0 15px; display: inline-flex; align-items: center; gap: 7px; border: 1px solid #cfd6df; border-radius: 6px; color: #344054; background: #fff; cursor: pointer; }
+.access-primary { min-height: 38px; padding: 0 15px; display: inline-flex; align-items: center; gap: 7px; border-radius: 6px; color: #fff; text-decoration: none; background: #335cff; }
 </style>

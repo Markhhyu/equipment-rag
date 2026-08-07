@@ -18,7 +18,7 @@ export async function apiFetch(
 ): Promise<Response> {
   const headers = new Headers(init.headers)
   for (const [key, value] of Object.entries(requestHeaders(apiKey, json))) headers.set(key, value)
-  const response = await fetch(path, { ...init, headers })
+  const response = await fetch(path, { ...init, headers, credentials: 'include' })
   if (!response.ok) throw new Error(await readApiError(response))
   return response
 }
