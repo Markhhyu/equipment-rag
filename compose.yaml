@@ -1,6 +1,6 @@
 name: equipment-rag
 
-# 两个应用服务共用的环境变量；`.env` 中的同名值会覆盖这里的安全本地默认值。
+# 三个应用服务共用的环境变量；`.env` 中的同名值会覆盖这里的安全本地默认值。
 x-app-environment: &app-environment
   PROJECT_ROOT: /app
   # 应用环境和入口安全。
@@ -152,20 +152,30 @@ x-app-environment: &app-environment
   NEO4J_URI: ${NEO4J_URI:-}
   NEO4J_USERNAME: ${NEO4J_USERNAME:-}
   NEO4J_PASSWORD: ${NEO4J_PASSWORD:-}
-  # 控制台和文件日志。
+  # 容器日志统一输出JSON到stdout，由Alloy采集；宿主机直跑仍可在.env中使用文本和文件日志。
   LOG_CONSOLE_ENABLE: ${LOG_CONSOLE_ENABLE:-true}
   LOG_CONSOLE_LEVEL: ${LOG_CONSOLE_LEVEL:-INFO}
   LOG_CONSOLE_ENCODING: ${LOG_CONSOLE_ENCODING:-utf-8}
-  LOG_FILE_ENABLE: ${LOG_FILE_ENABLE:-true}
+  LOG_FORMAT: ${CONTAINER_LOG_FORMAT:-json}
+  LOG_FILE_ENABLE: ${CONTAINER_LOG_FILE_ENABLE:-false}
   LOG_FILE_LEVEL: ${LOG_FILE_LEVEL:-INFO}
   LOG_FILE_RETENTION: ${LOG_FILE_RETENTION:-7 days}
   LOG_ENQUEUE: ${LOG_ENQUEUE:-false}
+  LOG_DIAGNOSE: ${LOG_DIAGNOSE:-false}
+
+# Docker本地日志只作为Alloy采集源和故障兜底，限制单容器磁盘占用。
+x-container-logging: &container-logging
+  driver: json-file
+  options:
+    max-size: ${DOCKER_LOG_MAX_SIZE:-20m}
+    max-file: ${DOCKER_LOG_MAX_FILES:-5}
 
 # 应用服务公共模板：统一镜像、依赖服务、数据目录和重启策略。
 x-app-service: &app-service
   build:
     context: .
   restart: unless-stopped
+  logging: *container-logging
   environment: *app-environment
   depends_on:
     mongo:
@@ -177,7 +187,6 @@ x-app-service: &app-service
   volumes:
     - model-cache:/root/.cache
     - app-output:/app/output
-    - app-logs:/app/logs
 
 services:
   # 统一前端入口：同源提供 Vue Router 页面，并代理三个后端 API。
@@ -186,6 +195,7 @@ services:
       context: .
       dockerfile: deploy/web/Dockerfile
     restart: unless-stopped
+    logging: *container-logging
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-8080}:8080"
     depends_on:
@@ -200,6 +210,9 @@ services:
   import-api:
     <<: *app-service
     command: ["uvicorn", "app.apps.import_api:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      <<: *app-environment
+      APP_SERVICE_NAME: import-api
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${IMPORT_API_PORT:-8000}:8000"
     healthcheck:
@@ -213,6 +226,9 @@ services:
   query-api:
     <<: *app-service
     command: ["uvicorn", "app.apps.query_api:app", "--host", "0.0.0.0", "--port", "8001"]
+    environment:
+      <<: *app-environment
+      APP_SERVICE_NAME: query-api
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${QUERY_API_PORT:-8001}:8001"
     healthcheck:
@@ -228,6 +244,7 @@ services:
     command: ["uvicorn", "app.apps.workflow_api:app", "--host", "0.0.0.0", "--port", "8002"]
     environment:
       <<: *app-environment
+      APP_SERVICE_NAME: workflow-api
       FEISHU_WORKFLOW_ENABLED: ${FEISHU_WORKFLOW_ENABLED:-false}
       WORKFLOW_CONFIG_ENCRYPTION_KEY: ${WORKFLOW_CONFIG_ENCRYPTION_KEY:-}
       WORKFLOW_CONFIG_KEY_FILE: ${WORKFLOW_CONFIG_KEY_FILE:-}
@@ -255,6 +272,7 @@ services:
   mongo:
     image: mongo:8.2.12-noble
     restart: unless-stopped
+    logging: *container-logging
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:-equipment}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:-equipment-local}
@@ -272,6 +290,7 @@ services:
   etcd:
     image: quay.io/coreos/etcd:v3.5.18
     restart: unless-stopped
+    logging: *container-logging
     environment:
       ETCD_AUTO_COMPACTION_MODE: revision
       ETCD_AUTO_COMPACTION_RETENTION: "1000"
@@ -290,6 +309,7 @@ services:
   minio:
     image: minio/minio:RELEASE.2024-12-18T13-15-44Z
     restart: unless-stopped
+    logging: *container-logging
     environment:
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-equipment}
       MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-equipment-local}
@@ -310,6 +330,7 @@ services:
   milvus:
     image: milvusdb/milvus:v2.6.18
     restart: unless-stopped
+    logging: *container-logging
     command: ["milvus", "run", "standalone"]
     security_opt:
       - seccomp:unconfined
@@ -335,12 +356,13 @@ services:
       retries: 20
       start_period: 30s
 
-  # Prometheus负责定时抓取两个API服务的/metrics。
+  # Prometheus负责定时抓取三个API服务的/metrics。
   # 使用profile避免默认启动增加资源占用：docker compose --profile observability up -d
   prometheus:
     image: prom/prometheus:v3.5.0
     profiles: ["observability"]
     restart: unless-stopped
+    logging: *container-logging
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
@@ -349,6 +371,7 @@ services:
       - "${BIND_ADDRESS:-127.0.0.1}:${PROMETHEUS_PORT:-9090}:9090"
     volumes:
       - ./deploy/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/observability/prometheus-rules.yml:/etc/prometheus/prometheus-rules.yml:ro
       - prometheus-data:/prometheus
     depends_on:
       import-api:
@@ -358,12 +381,52 @@ services:
       workflow-api:
         condition: service_healthy
 
+  # Loki集中保存容器日志；默认保留7天，可按磁盘容量调整。
+  loki:
+    image: grafana/loki:3.5.0
+    profiles: ["observability"]
+    restart: unless-stopped
+    logging: *container-logging
+    environment:
+      LOKI_RETENTION_PERIOD: ${LOKI_RETENTION_PERIOD:-168h}
+    command:
+      - "-config.file=/etc/loki/loki.yml"
+      - "-config.expand-env=true"
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${LOKI_PORT:-3100}:3100"
+    volumes:
+      - ./deploy/observability/loki.yml:/etc/loki/loki.yml:ro
+      - loki-data:/loki
+
+  # Alloy通过Docker标签发现本项目容器，并把stdout日志发送到Loki。
+  # Docker socket即使只读也具备较高宿主机可见性，仅应在受控节点运行。
+  alloy:
+    image: grafana/alloy:v1.8.3
+    profiles: ["observability"]
+    restart: unless-stopped
+    logging: *container-logging
+    user: "0:0"
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${ALLOY_PORT:-12345}:12345"
+    volumes:
+      - ./deploy/observability/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy-data:/var/lib/alloy/data
+    depends_on:
+      - loki
+
   # Grafana读取Prometheus并展示仓库自带的RAG仪表盘。
   # 本地默认密码仅用于开发，服务器部署前必须在.env中修改。
   grafana:
     image: grafana/grafana:11.6.0
     profiles: ["observability"]
     restart: unless-stopped
+    logging: *container-logging
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-equipment-local}
@@ -376,15 +439,17 @@ services:
       - ./deploy/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
     depends_on:
       - prometheus
+      - loki
 
 volumes:
-  # 命名卷让容器重建后仍能保留数据、模型缓存和日志。
+  # 命名卷让容器重建后仍能保留业务数据、模型缓存、指标和集中日志。
   mongo-data:
   minio-data:
   etcd-data:
   milvus-data:
   model-cache:
   app-output:
-  app-logs:
   prometheus-data:
   grafana-data:
+  loki-data:
+  alloy-data:

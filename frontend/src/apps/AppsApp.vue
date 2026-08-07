@@ -45,7 +45,7 @@ const componentApps: AppLink[] = [
   { name: 'Attu', description: 'Milvus 管理', address: '默认端口 3002', href: directServiceUrl('3002'), icon: Coin, tone: 'green', external: true, requiredRole: 'admin' },
   { name: 'Langfuse', description: 'LLM 链路追踪', address: '默认端口 3000', href: directServiceUrl('3000'), icon: Operation, tone: 'blue', external: true, requiredRole: 'admin' },
   { name: 'MinIO', description: '业务对象存储', address: '默认端口 9001', href: directServiceUrl('9001'), icon: Files, tone: 'amber', external: true, requiredRole: 'admin' },
-  { name: 'Grafana', description: '指标仪表盘', address: '默认端口 3001', href: directServiceUrl('3001'), icon: Histogram, tone: 'red', external: true, requiredRole: 'admin' },
+  { name: 'Grafana', description: '指标与日志排障', address: '默认端口 3001', href: directServiceUrl('3001'), icon: Histogram, tone: 'red', external: true, requiredRole: 'admin' },
   { name: 'Prometheus', description: '指标查询', address: '默认端口 9090', href: directServiceUrl('9090'), icon: TrendCharts, tone: 'blue', external: true, requiredRole: 'admin' },
   { name: 'Langfuse MinIO', description: '观测数据存储', address: '默认端口 9191', href: directServiceUrl('9191'), icon: Files, tone: 'neutral', external: true, requiredRole: 'admin' },
 ]

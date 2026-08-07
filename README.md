@@ -35,6 +35,7 @@
 | [配置与密钥指南](docs/configuration.md) | 不清楚 API Key、连接地址或密码从哪里获取时 |
 | [飞书审批连接器](docs/feishu-workflow.md) | 从未解决问答自动发起飞书“设备问题处理”审批 |
 | [可观测、评测与调优指南](docs/observability.md) | 需要分析 Trace、指标或调整 RAG 参数时 |
+| [集中日志与排障指南](docs/troubleshooting.md) | 需要按 request_id、trace_id 或 run_id 定位线上问题时 |
 | [运行恢复说明](docs/durable-runtime.md) | 需要理解任务状态、Checkpoint 和失败重试时 |
 | [安全与多租户说明](docs/security.md) | 准备部署到服务器或开放给其他用户时 |
 | [评测使用说明](evals/README.md) | 准备黄金问题集和自动回归时 |
@@ -214,7 +215,7 @@ Windows 推荐使用：
 3. 启动 MongoDB、MinIO、etcd 和 Milvus；
 4. 检测并按需启动宿主机 MinerU；
 5. 构建并启动导入 API、查询 API；
-6. 启动 Prometheus、Grafana 和 Attu；
+6. 启动 Prometheus、Loki、Alloy、Grafana 和 Attu；
 7. 等待健康检查并打印所有访问地址。
 
 首次启动需要下载容器镜像、Python 依赖、BGE-M3 和 Reranker 模型，耗时取决于网络和磁盘速度。
@@ -257,9 +258,11 @@ docker compose logs --tail 200 import-api query-api
 | 查询 API 文档 | <http://127.0.0.1:8001/docs> | 问答接口 Swagger |
 | MinIO 控制台 | <http://127.0.0.1:9001> | 查看原始文件和图片对象 |
 | Langfuse | <http://127.0.0.1:3000> | 单次 Trace、Token、Score 和反馈 |
-| Grafana | <http://127.0.0.1:3001> | 延迟、错误率和长期趋势 |
+| Grafana | <http://127.0.0.1:3001> | 指标趋势、集中日志检索和告警规则 |
 | Attu | <http://127.0.0.1:3002> | 查看 Milvus Collection 与数据 |
 | Prometheus | <http://127.0.0.1:9090> | 查询原始指标 |
+| Loki | <http://127.0.0.1:3100/ready> | 集中日志存储健康检查 |
+| Alloy | <http://127.0.0.1:12345> | Docker日志采集器状态 |
 | MinerU API | <http://127.0.0.1:8002/docs> | PDF 解析服务；安装后才可访问 |
 
 `8080` 通过同源网关提供 Vue Router 页面并代理三个业务 API，页面刷新不会返回 404。原有 `8000`、`8001`、`8002`
@@ -274,9 +277,9 @@ docker compose logs --tail 200 import-api query-api
 | 参数 | 适用场景 |
 |---|---|
 | `-SkipBuild` | 代码和依赖没有变化，只想快速恢复容器 |
-| `-CoreOnly` | 内存有限，不启动 Langfuse、Prometheus/Grafana 和 Attu |
+| `-CoreOnly` | 内存有限，不启动 Langfuse、Prometheus/Grafana/Loki/Alloy 和 Attu |
 | `-NoLangfuse` | 只跳过 Langfuse |
-| `-NoObservability` | 只跳过 Prometheus 和 Grafana |
+| `-NoObservability` | 跳过 Prometheus、Grafana、Loki 和 Alloy |
 | `-NoAttu` | 只跳过 Milvus 管理页面 |
 | `-NoMineru` | 不解析 PDF，或 MinerU 由其他方式运行 |
 | `-TimeoutSeconds 1200` | 首次下载镜像/模型较慢，延长单服务等待时间 |
@@ -303,7 +306,7 @@ docker compose up -d --build
 docker compose ps
 ```
 
-该方式默认启动两个 API、MongoDB、MinIO、etcd 和 Milvus，不启动独立 MinerU、Langfuse、Attu；Prometheus/Grafana 需要显式启用 profile：
+该方式默认启动三个 API、MongoDB、MinIO、etcd 和 Milvus，不启动独立 MinerU、Langfuse、Attu；Prometheus/Grafana/Loki/Alloy 需要显式启用 profile：
 
 ```powershell
 docker compose --profile observability up -d
@@ -570,6 +573,7 @@ MINERU_LANGUAGE=ch_server
 |---|---|---|
 | Langfuse | 单次导入或问答 | 查看节点、模型调用、Token、检索摘要、调优参数和用户反馈 |
 | Prometheus + Grafana | 技术运行趋势 | 查看吞吐、错误率、P95 延迟和节点性能 |
+| Loki + Alloy + Grafana | 应用与容器日志 | 按服务、`request_id`、`trace_id` 或 `run_id` 集中排障 |
 | 问答运营看板 | 业务解决结果 | 查看每日问答、直接解决、部分解决、未解决、待确认和人工复核 |
 | 黄金数据集评测 | 多版本效果对比 | 判断调参后 Recall、MRR、关键词、安全词和引用是否改善 |
 
@@ -605,7 +609,7 @@ uv run python -m app.evaluation.cli api `
   --fail-on-threshold
 ```
 
-完整指标解释和调优顺序见 [docs/observability.md](docs/observability.md)。
+完整指标解释和调优顺序见 [docs/observability.md](docs/observability.md)，线上排障步骤见 [docs/troubleshooting.md](docs/troubleshooting.md)。
 
 ---
 
@@ -674,7 +678,7 @@ equipment-rag-agent/
 ├─ deploy/
 │  ├─ langfuse/                # Langfuse 自部署 Compose
 │  ├─ attu/                    # Milvus 管理页面
-│  └─ observability/           # Prometheus 与 Grafana 配置
+│  └─ observability/           # Prometheus、Loki、Alloy 与 Grafana 配置
 ├─ docs/                       # 配置、安全、运行恢复和观测文档
 ├─ evals/                      # 评测配置、数据集和示例预测
 ├─ frontend/                   # Vue 3 + TypeScript 聊天、快速导入与知识治理页
@@ -773,7 +777,7 @@ BGE-M3 与 Reranker 第一次加载需要下载并初始化模型。模型会保
 - [x] API Key、角色和租户级数据隔离
 - [x] MongoDB 运行注册表、LangGraph Checkpoint 和失败恢复
 - [x] 确定性评测、覆盖率和自动回归门禁
-- [x] Langfuse、Prometheus、Grafana 与一键运维脚本
+- [x] Langfuse、Prometheus、Loki、Alloy、Grafana 与一键运维脚本
 
 ---
 

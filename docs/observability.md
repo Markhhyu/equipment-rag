@@ -1,6 +1,6 @@
 # RAG 可观测、评测与调优指南
 
-本文面向刚接触 Agent 和 RAG 的开发者，说明项目为什么同时使用 Langfuse、Prometheus/Grafana 和黄金评测集，以及看到异常指标后应该检查哪里。
+本文面向刚接触 Agent 和 RAG 的开发者，说明项目为什么同时使用 Langfuse、Prometheus/Grafana、Loki/Alloy 和黄金评测集，以及看到异常指标后应该检查哪里。
 
 ## 1. 三类工具分别解决什么问题
 
@@ -71,7 +71,7 @@ Windows 下直接从仓库根目录执行：
 .\start-all.ps1
 ```
 
-默认会同时启动业务服务、Langfuse、Prometheus、Grafana 和 Attu，并在每一步执行配置校验和健康检查。
+默认会同时启动业务服务、Langfuse、Prometheus、Loki、Alloy、Grafana 和 Attu，并在每一步执行配置校验和健康检查。
 首次运行时，脚本会自动生成 `deploy/langfuse/.env` 中的本地部署密钥；真实模型 API Key 和稍后创建的
 Langfuse 项目 API Key 仍应填写在根目录 `.env`。一键暂停使用：
 

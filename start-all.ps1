@@ -4,8 +4,8 @@ param(
     [Alias("NoBuild")]
     [switch]$SkipBuild,
 
-    # 只启动业务必需组件：数据库、向量库、两个 API 和 MinerU。
-    # Langfuse、Prometheus/Grafana、Attu 都不会启动，适合低内存机器临时开发。
+    # 只启动业务必需组件：数据库、向量库、三个 API 和 MinerU。
+    # Langfuse、Prometheus/Grafana/Loki/Alloy、Attu 都不会启动，适合低内存机器临时开发。
     [switch]$CoreOnly,
 
     # 以下开关用于单独跳过某个可选组件；正常使用时不需要传入。
@@ -658,15 +658,19 @@ try {
     }
 
     if (-not $NoObservability) {
-        Write-Step "启动 Prometheus 与 Grafana"
+        Write-Step "启动 Prometheus、Loki、Alloy 与 Grafana"
         Invoke-DockerCommand -DockerArgs @(
             "compose", "--project-name", "equipment-rag", "-f", $CoreCompose,
-            "--profile", "observability", "up", "-d", "prometheus", "grafana"
+            "--profile", "observability", "up", "-d", "prometheus", "loki", "alloy", "grafana"
         )
 
         $prometheusPort = Get-DotEnvValue -Name "PROMETHEUS_PORT" -DefaultValue "9090"
+        $lokiPort = Get-DotEnvValue -Name "LOKI_PORT" -DefaultValue "3100"
+        $alloyPort = Get-DotEnvValue -Name "ALLOY_PORT" -DefaultValue "12345"
         $grafanaPort = Get-DotEnvValue -Name "GRAFANA_PORT" -DefaultValue "3001"
         Wait-HttpService -Name "Prometheus" -Url "http://127.0.0.1:$prometheusPort/-/ready" -Timeout $TimeoutSeconds
+        Wait-HttpService -Name "Loki" -Url "http://127.0.0.1:$lokiPort/ready" -Timeout $TimeoutSeconds
+        Wait-HttpService -Name "Alloy" -Url "http://127.0.0.1:$alloyPort/-/ready" -Timeout $TimeoutSeconds
         Wait-HttpService -Name "Grafana" -Url "http://127.0.0.1:$grafanaPort/api/health" -Timeout $TimeoutSeconds
     }
 
@@ -697,6 +701,8 @@ try {
     if (-not $NoLangfuse) { Write-Host "Langfuse：          http://127.0.0.1:3000" }
     if (-not $NoObservability) {
         Write-Host "Prometheus：        http://127.0.0.1:$prometheusPort"
+        Write-Host "Loki：              http://127.0.0.1:$lokiPort/ready"
+        Write-Host "Alloy：             http://127.0.0.1:$alloyPort"
         Write-Host "Grafana：           http://127.0.0.1:$grafanaPort"
     }
     if (-not $NoAttu) { Write-Host "Attu：              http://127.0.0.1:$attuPort" }

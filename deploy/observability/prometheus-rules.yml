@@ -1,0 +1,50 @@
+groups:
+  - name: equipment-rag-runtime
+    rules:
+      - alert: EquipmentRagServiceDown
+        expr: up{job=~"equipment-rag-.+"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Equipment RAG服务不可用"
+          description: "Prometheus目标 {{ $labels.job }} 已连续2分钟不可用。"
+
+      - alert: EquipmentRagHighHttp5xxRatio
+        expr: |
+          sum by (service) (rate(equipment_rag_http_requests_total{status=~"5.."}[5m]))
+          /
+          clamp_min(sum by (service) (rate(equipment_rag_http_requests_total[5m])), 0.000001)
+          > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Equipment RAG HTTP 5xx比例过高"
+          description: "服务 {{ $labels.service }} 的5xx比例已连续5分钟超过5%。"
+
+      - alert: EquipmentRagHighP95Latency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (service, le) (rate(equipment_rag_http_request_duration_seconds_bucket[10m]))
+          ) > 30
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Equipment RAG P95延迟过高"
+          description: "服务 {{ $labels.service }} 的HTTP P95延迟已连续10分钟超过30秒。"
+
+      - alert: EquipmentRagAgentFailureRatioHigh
+        expr: |
+          sum by (kind) (rate(equipment_rag_agent_run_total{status="failed"}[15m]))
+          /
+          clamp_min(sum by (kind) (rate(equipment_rag_agent_run_total[15m])), 0.000001)
+          > 0.20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Equipment RAG任务失败比例过高"
+          description: "{{ $labels.kind }}任务失败比例已连续10分钟超过20%。"

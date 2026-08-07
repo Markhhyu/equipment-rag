@@ -1,4 +1,5 @@
 import json
+import io
 import warnings
 from urllib.parse import parse_qs, urlencode, urlparse
 
@@ -13,6 +14,7 @@ from app.platform.security.http import configure_http_security
 from app.platform.security.passwords import hash_password, normalize_email, verify_password
 from app.platform.security.routes import reset_auth_rate_limits_for_tests, router as auth_router
 from app.platform.security.user_store import DuplicateEmailError
+from app.platform.observability import logging as app_logging
 
 
 @pytest.fixture(autouse=True)
@@ -199,12 +201,56 @@ def test_http_hardening_adds_request_and_browser_security_headers(monkeypatch):
     async def health():
         return {"ok": True}
 
-    response = TestClient(app).get("/health", headers={"X-Request-ID": "request-123"})
+    output = io.StringIO()
+    sink_id = app_logging.logger.add(output, serialize=True, diagnose=False)
+    try:
+        response = TestClient(app).get("/health", headers={"X-Request-ID": "request-123"})
+    finally:
+        app_logging.logger.remove(sink_id)
 
     assert response.status_code == 200
     assert response.headers["X-Request-ID"] == "request-123"
     assert response.headers["X-Content-Type-Options"] == "nosniff"
     assert response.headers["X-Frame-Options"] == "DENY"
+    audit_log = json.loads(output.getvalue())["record"]["extra"]
+    assert audit_log["event"] == "http_request"
+    assert audit_log["request_id"] == "request-123"
+    assert audit_log["http_method"] == "GET"
+    assert audit_log["http_path"] == "/health"
+    assert audit_log["http_status"] == 200
+    assert app_logging.current_log_context() == {}
+
+
+def test_http_exception_is_logged_with_request_id_and_context_is_cleared(monkeypatch):
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Using `httpx` with `starlette.testclient` is deprecated")
+        from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("AUTH_MODE", "disabled")
+    app = FastAPI()
+    configure_http_security(app)
+
+    @app.get("/failure")
+    async def failure():
+        raise RuntimeError("expected failure")
+
+    output = io.StringIO()
+    sink_id = app_logging.logger.add(output, serialize=True, diagnose=False)
+    try:
+        response = TestClient(app, raise_server_exceptions=False).get(
+            "/failure",
+            headers={"X-Request-ID": "failed-request-123"},
+        )
+    finally:
+        app_logging.logger.remove(sink_id)
+
+    assert response.status_code == 500
+    failure_log = json.loads(output.getvalue())["record"]
+    assert failure_log["message"] == "HTTP request failed"
+    assert failure_log["extra"]["request_id"] == "failed-request-123"
+    assert failure_log["extra"]["http_status"] == 500
+    assert failure_log["exception"]["type"] == "RuntimeError"
+    assert app_logging.current_log_context() == {}
 
 
 def test_auth_me_returns_tenant_and_roles_without_exposing_key(monkeypatch):

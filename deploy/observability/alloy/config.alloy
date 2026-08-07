@@ -1,0 +1,73 @@
+logging {
+  level  = "info"
+  format = "logfmt"
+}
+
+discovery.docker "equipment_rag" {
+  host             = "unix:///var/run/docker.sock"
+  refresh_interval = "5s"
+
+  filter {
+    name   = "label"
+    values = ["com.docker.compose.project=equipment-rag"]
+  }
+}
+
+discovery.relabel "equipment_rag" {
+  targets = discovery.docker.equipment_rag.targets
+
+  // 避免采集链路自身的错误日志被再次采集并形成反馈环。
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    regex         = "(alloy|loki)"
+    action        = "drop"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    replacement   = "$1"
+    target_label  = "container"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "project"
+  }
+}
+
+loki.source.docker "equipment_rag" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.equipment_rag.output
+  forward_to = [loki.process.equipment_rag.receiver]
+}
+
+loki.process "equipment_rag" {
+  stage.json {
+    expressions = {
+      environment = "record.extra.environment",
+      level       = "record.level.name",
+    }
+  }
+
+  // 只提升低基数字段。request_id、trace_id、tenant_id和run_id保留在JSON正文中查询。
+  stage.labels {
+    values = {
+      environment = "",
+      level       = "",
+    }
+  }
+
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

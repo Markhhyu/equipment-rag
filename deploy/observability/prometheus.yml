@@ -5,6 +5,9 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+rule_files:
+  - /etc/prometheus/prometheus-rules.yml
+
 scrape_configs:
   # 文件导入服务：观察解析、切片、Embedding和Milvus入库。
   - job_name: equipment-rag-import

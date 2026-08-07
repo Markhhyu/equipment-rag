@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from app.modules.qa.infrastructure.attachments import (
     validate_session_attachment_refs,
 )
-from app.platform.observability.logging import logger
+from app.platform.observability.logging import bind_log_context, clear_log_context, logger
 from app.platform.observability.langfuse_monitor import (
     create_query_trace_id,
     flush_langfuse,
@@ -158,6 +158,7 @@ def run_query_graph(
         "selected_version_scope_id": version_scope_id,
         "reset_version_context": reset_version_context,
     }
+    context_token = bind_log_context(trace_id=trace_id, run_id=trace_id, tenant_id=tenant_id)
 
     try:
         from app.modules.qa.graph.main_graph import query_app
@@ -297,6 +298,8 @@ def run_query_graph(
             )
         observe_run("query", time.perf_counter() - run_started, "failed")
         return None
+    finally:
+        clear_log_context(context_token)
 
 
 @app.post("/query")

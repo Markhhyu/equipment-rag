@@ -324,7 +324,7 @@ docker compose up -d --build
 # 查看容器和健康状态。
 docker compose ps
 
-# 查看核心服务日志。
+# Loki尚未启动时，仍可用Docker日志作为排障兜底。
 docker compose logs -f import-api query-api
 ```
 

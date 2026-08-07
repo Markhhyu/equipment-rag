@@ -1,0 +1,76 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "datasource": {"type": "loki", "uid": "equipment-rag-loki"},
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 0},
+      "id": 1,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "values": false}},
+      "targets": [{"expr": "sum(count_over_time({project=\"equipment-rag\", service=~\"$service\"} |~ `(?i)(error|exception|failed|critical)` [24h]))", "queryType": "range", "refId": "A"}],
+      "title": "最近24小时错误日志",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "loki", "uid": "equipment-rag-loki"},
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "gridPos": {"h": 8, "w": 18, "x": 6, "y": 0},
+      "id": 2,
+      "targets": [{"expr": "sum by (service) (count_over_time({project=\"equipment-rag\", service=~\"$service\"} |~ `(?i)(error|exception|failed|critical)` [5m]))", "legendFormat": "{{service}}", "queryType": "range", "refId": "A"}],
+      "title": "各服务错误趋势",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "loki", "uid": "equipment-rag-loki"},
+      "gridPos": {"h": 12, "w": 24, "x": 0, "y": 8},
+      "id": 3,
+      "options": {"dedupStrategy": "none", "enableLogDetails": true, "prettifyLogMessage": true, "showCommonLabels": false, "showLabels": false, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true},
+      "targets": [{"expr": "{project=\"equipment-rag\", service=~\"$service\"} |= `$search`", "queryType": "range", "refId": "A"}],
+      "title": "日志检索（可输入request_id、trace_id、run_id或错误关键字）",
+      "type": "logs"
+    },
+    {
+      "datasource": {"type": "loki", "uid": "equipment-rag-loki"},
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 20},
+      "id": 4,
+      "options": {"dedupStrategy": "none", "enableLogDetails": true, "prettifyLogMessage": true, "showCommonLabels": false, "showLabels": true, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true},
+      "targets": [{"expr": "{project=\"equipment-rag\", service=~\"$service\"} |~ `(?i)(error|exception|failed|critical)`", "queryType": "range", "refId": "A"}],
+      "title": "最近错误日志",
+      "type": "logs"
+    }
+  ],
+  "refresh": "15s",
+  "schemaVersion": 40,
+  "tags": ["logs", "troubleshooting", "observability"],
+  "templating": {
+    "list": [
+      {
+        "allValue": ".*",
+        "current": {"text": "All", "value": "$__all"},
+        "datasource": {"type": "loki", "uid": "equipment-rag-loki"},
+        "definition": "label_values({project=\"equipment-rag\"}, service)",
+        "includeAll": true,
+        "label": "服务",
+        "name": "service",
+        "query": "label_values({project=\"equipment-rag\"}, service)",
+        "refresh": 1,
+        "type": "query"
+      },
+      {
+        "current": {"text": "", "value": ""},
+        "label": "关联ID或关键字",
+        "name": "search",
+        "options": [{"selected": true, "text": "", "value": ""}],
+        "query": "",
+        "type": "textbox"
+      }
+    ]
+  },
+  "time": {"from": "now-6h", "to": "now"},
+  "timezone": "browser",
+  "title": "Equipment RAG 日志与排障",
+  "uid": "equipment-rag-logs",
+  "version": 1
+}

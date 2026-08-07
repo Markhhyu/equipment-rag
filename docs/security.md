@@ -139,6 +139,11 @@ retrieval intentionally does not fall back to unscoped records.
 - CORS never accepts `*`; cookie credentials are disabled.
 - Responses include request IDs and baseline browser security headers.
 - API keys are compared in constant time and are never returned or logged.
+- Structured logs must not contain passwords, API keys, cookies, complete user
+  questions or answers, document bodies, or other confidential payloads.
+- `LOG_DIAGNOSE` must remain disabled in production because exception diagnostics
+  can otherwise expose local variables. Loki and Grafana must stay behind the
+  internal gateway or private network.
 
 Relevant settings:
 

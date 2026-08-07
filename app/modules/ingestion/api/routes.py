@@ -17,7 +17,7 @@ from app.modules.knowledge.application.registry import get_document_registry
 from app.modules.knowledge.domain.document import DocumentStatus
 from app.modules.ingestion.api.knowledge_routes import router as knowledge_router
 from app.platform.storage.minio import get_minio_client, minio_object_uri
-from app.platform.observability.logging import logger
+from app.platform.observability.logging import bind_log_context, clear_log_context, logger
 from app.modules.knowledge.domain.trust import normalize_trust_level
 from app.modules.ingestion.graph.state import get_default_state
 from app.platform.observability.langfuse_monitor import flush_langfuse, trace_import
@@ -176,6 +176,7 @@ def run_graph_task(
     )
     owner = run_owner()
     run_store.claim(task_id, owner, runtime_config.lease_seconds)
+    context_token = bind_log_context(run_id=task_id, tenant_id=tenant_id)
 
     try:
         from app.modules.ingestion.graph.main_graph import kb_import_app
@@ -279,6 +280,8 @@ def run_graph_task(
             logger.exception("持久化导入运行失败状态时发生异常")
         logger.error(f"[{task_id}] LangGraph全流程执行失败，异常信息：{exc}", exc_info=True)
         observe_run("import", time.perf_counter() - run_started, "failed")
+    finally:
+        clear_log_context(context_token)
 
 
 async def _enqueue_import(
