@@ -5,12 +5,14 @@ import threading
 import time
 from collections import defaultdict, deque
 from typing import Annotated
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from app.platform.observability.logging import logger
-from app.platform.security import user_store
+from app.platform.security import email_sender, user_store
 from app.platform.security.auth import SESSION_COOKIE_NAME, Principal, authenticate
 from app.platform.security.config import load_security_config
 from app.platform.security.passwords import hash_password, normalize_email, validate_password, verify_password
@@ -26,6 +28,14 @@ _DUMMY_PASSWORD_HASH = hash_password("not-a-real-user-password")
 class CredentialsRequest(BaseModel):
     email: str = Field(min_length=3, max_length=254)
     password: str = Field(min_length=1, max_length=128)
+
+
+class EmailRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+
+
+class VerificationRequest(BaseModel):
+    token: str = Field(min_length=32, max_length=512)
 
 
 def _principal_payload(principal: Principal) -> dict[str, object]:
@@ -63,6 +73,24 @@ def _set_session_cookie(response: Response, token: str) -> None:
     )
 
 
+async def _send_verification_email(user: dict[str, object]) -> None:
+    config = load_security_config()
+    store = user_store.get_user_store()
+    token = store.create_email_verification(str(user["user_id"]), config.email_verification_ttl_seconds)
+    verification_url = f"{config.public_base_url}/verify-email?{urlencode({'token': token})}"
+    expires_minutes = max(1, config.email_verification_ttl_seconds // 60)
+    try:
+        await run_in_threadpool(
+            email_sender.get_verification_email_sender().send_verification,
+            str(user["email"]),
+            verification_url,
+            expires_minutes,
+        )
+    except Exception as exc:
+        logger.exception(f"验证邮件发送失败，user_id={user['user_id']}，错误={exc}")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="验证邮件发送失败，请稍后重试") from exc
+
+
 def _rate_limit(request: Request, scope: str, identity: str, limit: int, window_seconds: int) -> None:
     client = request.client.host if request.client else "unknown"
     identity_hash = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
@@ -97,6 +125,7 @@ async def auth_config() -> dict[str, object]:
         "auth_mode": config.auth_mode,
         "password_login_enabled": config.auth_mode == "password",
         "registration_enabled": config.registration_enabled,
+        "email_verification_required": config.email_verification_required,
     }
 
 
@@ -119,13 +148,30 @@ async def register(request: Request, response: Response, credentials: Credential
             password_hash=hash_password(credentials.password),
             tenant_id=config.registration_tenant_id,
             roles=frozenset({"query"}),
+            status="pending_verification" if config.email_verification_required else "active",
         )
     except DuplicateEmailError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        existing_user = store.find_user_by_email(email)
+        can_retry_verification = (
+            config.email_verification_required
+            and existing_user
+            and existing_user.get("status") == "pending_verification"
+            and verify_password(credentials.password, str(existing_user.get("password_hash") or ""))
+        )
+        if not can_retry_verification:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        user = existing_user
+    logger.info(f"audit auth_event=register user_id={user['user_id']} tenant_id={user['tenant_id']}")
+    if config.email_verification_required:
+        await _send_verification_email(user)
+        return {
+            "verification_required": True,
+            "email": user["email"],
+            "expires_in": config.email_verification_ttl_seconds,
+        }
     token = store.create_session(str(user["user_id"]), config.session_ttl_seconds)
     _set_session_cookie(response, token)
-    logger.info(f"audit auth_event=register user_id={user['user_id']} tenant_id={user['tenant_id']}")
-    return _principal_payload(_user_principal(user))
+    return {**_principal_payload(_user_principal(user)), "verification_required": False}
 
 
 @router.post("/login")
@@ -143,6 +189,8 @@ async def login(request: Request, response: Response, credentials: CredentialsRe
     user = store.find_user_by_email(email)
     encoded_password = str(user.get("password_hash") or "") if user else _DUMMY_PASSWORD_HASH
     password_valid = verify_password(credentials.password, encoded_password)
+    if user and password_valid and user.get("status") == "pending_verification":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="请先完成邮箱验证")
     if not user or user.get("status") != "active" or not password_valid:
         logger.warning("audit auth_event=login_failed")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="邮箱或密码错误")
@@ -151,6 +199,39 @@ async def login(request: Request, response: Response, credentials: CredentialsRe
     _set_session_cookie(response, token)
     logger.info(f"audit auth_event=login user_id={user['user_id']} tenant_id={user['tenant_id']}")
     return _principal_payload(_user_principal(user))
+
+
+@router.post("/verify-email")
+async def verify_email(request: Request, response: Response, verification: VerificationRequest) -> dict[str, object]:
+    config = load_security_config()
+    if config.auth_mode != "password":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="邮箱验证尚未启用")
+    _rate_limit(request, "verify-email-ip", "*", limit=30, window_seconds=15 * 60)
+    store = user_store.get_user_store()
+    user = store.verify_email(verification.token)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="验证链接无效或已过期")
+    token = store.create_session(str(user["user_id"]), config.session_ttl_seconds)
+    _set_session_cookie(response, token)
+    logger.info(f"audit auth_event=email_verified user_id={user['user_id']} tenant_id={user['tenant_id']}")
+    return _principal_payload(_user_principal(user))
+
+
+@router.post("/resend-verification", status_code=status.HTTP_202_ACCEPTED)
+async def resend_verification(request: Request, payload: EmailRequest) -> dict[str, str]:
+    config = load_security_config()
+    if config.auth_mode != "password" or not config.email_verification_required:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="邮箱验证尚未启用")
+    try:
+        email = normalize_email(payload.email)
+    except ValueError:
+        return {"message": "如果该邮箱存在待验证账号，验证邮件将会重新发送"}
+    _rate_limit(request, "resend-ip", "*", limit=20, window_seconds=60 * 60)
+    _rate_limit(request, "resend-email", email, limit=3, window_seconds=60 * 60)
+    user = user_store.get_user_store().find_user_by_email(email)
+    if user and user.get("status") == "pending_verification":
+        await _send_verification_email(user)
+    return {"message": "如果该邮箱存在待验证账号，验证邮件将会重新发送"}
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)

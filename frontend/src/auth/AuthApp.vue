@@ -8,6 +8,7 @@ import {
   loadAuthConfig,
   loginWithPassword,
   refreshCurrentPrincipal,
+  resendVerificationEmail,
   registerWithPassword,
 } from '../shared/auth'
 
@@ -19,6 +20,9 @@ const confirmPassword = ref('')
 const passwordVisible = ref(false)
 const submitting = ref(false)
 const loading = ref(true)
+const verificationSent = ref(false)
+const pendingEmail = ref('')
+const resending = ref(false)
 const isRegister = computed(() => route.path === '/register')
 const registrationEnabled = computed(() => Boolean(authState.config?.registration_enabled))
 const formComplete = computed(() => Boolean(
@@ -42,13 +46,33 @@ async function submit(): Promise<void> {
   }
   submitting.value = true
   try {
-    if (isRegister.value) await registerWithPassword(email.value, password.value)
-    else await loginWithPassword(email.value, password.value)
+    if (isRegister.value) {
+      const result = await registerWithPassword(email.value, password.value)
+      if ('verification_required' in result && result.verification_required) {
+        pendingEmail.value = result.email
+        verificationSent.value = true
+        return
+      }
+    } else {
+      await loginWithPassword(email.value, password.value)
+    }
     await router.replace(safeRedirect())
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : String(error))
   } finally {
     submitting.value = false
+  }
+}
+
+async function resend(): Promise<void> {
+  resending.value = true
+  try {
+    await resendVerificationEmail(pendingEmail.value)
+    ElMessage.success('验证邮件已重新发送')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : String(error))
+  } finally {
+    resending.value = false
   }
 }
 
@@ -78,11 +102,17 @@ onMounted(async () => {
 
       <div class="auth-heading">
         <span class="auth-heading-icon"><el-icon><Lock /></el-icon></span>
-        <h1>{{ isRegister ? '创建账号' : '账号登录' }}</h1>
-        <p>{{ isRegister ? '注册后即可使用智能问答' : '登录设备知识工作台' }}</p>
+        <h1>{{ verificationSent ? '验证邮件已发送' : isRegister ? '创建账号' : '账号登录' }}</h1>
+        <p>{{ verificationSent ? pendingEmail : isRegister ? '注册后即可使用智能问答' : '登录设备知识工作台' }}</p>
       </div>
 
-      <form v-if="!isRegister || registrationEnabled" class="auth-form" @submit.prevent="submit">
+      <div v-if="verificationSent" class="verification-state">
+        <el-icon><Message /></el-icon>
+        <strong>请打开邮件中的验证链接</strong>
+        <el-button :loading="resending" @click="resend">重新发送</el-button>
+      </div>
+
+      <form v-else-if="!isRegister || registrationEnabled" class="auth-form" @submit.prevent="submit">
         <label>
           <span>邮箱</span>
           <el-input v-model="email" size="large" type="email" autocomplete="email" placeholder="name@example.com">
@@ -122,7 +152,7 @@ onMounted(async () => {
         <strong>暂未开放邮箱注册</strong>
       </div>
 
-      <p class="auth-switch">
+      <p v-if="!verificationSent" class="auth-switch">
         <template v-if="isRegister">已有账号？<router-link :to="{ path: '/login', query: route.query }">登录</router-link></template>
         <template v-else>还没有账号？<router-link :to="{ path: '/register', query: route.query }">注册</router-link></template>
       </p>

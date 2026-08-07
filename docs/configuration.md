@@ -123,13 +123,23 @@ APP_ENVIRONMENT=production
 AUTH_MODE=password
 AUTH_REGISTRATION_ENABLED=true
 AUTH_REGISTRATION_TENANT_ID=public
+AUTH_EMAIL_VERIFICATION_REQUIRED=true
+AUTH_EMAIL_VERIFICATION_TTL_SECONDS=1800
+AUTH_PUBLIC_BASE_URL=https://agent.example.com
 AUTH_SESSION_TTL_SECONDS=604800
 AUTH_COOKIE_SECURE=true
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USERNAME=你的SMTP账号
+SMTP_PASSWORD=你的SMTP密码或授权码
+SMTP_FROM_ADDRESS=noreply@example.com
+SMTP_SECURITY=starttls
 ```
 
 公开注册用户固定获得 `query` 角色，不能从注册请求指定角色或租户。浏览器使用 HttpOnly 会话 Cookie，
-已配置的 API Key 仍可供自动任务使用。公开互联网部署还应在网关配置限流和机器人防护，并在邮件验证
-功能接入后再面向不受控用户开放注册。
+已配置的 API Key 仍可供自动任务使用。生产环境开放注册时强制开启邮箱验证；`AUTH_PUBLIC_BASE_URL` 必须是用户能访问的
+HTTPS 前端地址。`SMTP_PASSWORD` 只能写入本地 `.env` 或部署平台的密钥管理服务，不得提交。邮箱验证不等于机器人防护，
+公网部署仍应在网关配置限流、验证码或 WAF 规则。本地受控开发可以保持 `AUTH_EMAIL_VERIFICATION_REQUIRED=false`。
 
 调用示例：
 

@@ -17,7 +17,20 @@ export interface AuthConfig {
   auth_mode: 'disabled' | 'api_key' | 'password'
   password_login_enabled: boolean
   registration_enabled: boolean
+  email_verification_required: boolean
 }
+
+export interface PendingEmailVerification {
+  verification_required: true
+  email: string
+  expires_in: number
+}
+
+export interface AuthenticatedRegistration extends CurrentPrincipal {
+  verification_required: false
+}
+
+export type RegistrationResult = AuthenticatedRegistration | PendingEmailVerification
 
 export const authState = reactive<{
   principal: CurrentPrincipal | null
@@ -55,15 +68,33 @@ export async function loginWithPassword(email: string, password: string): Promis
   return principal
 }
 
-export async function registerWithPassword(email: string, password: string): Promise<CurrentPrincipal> {
+export async function registerWithPassword(email: string, password: string): Promise<RegistrationResult> {
   const response = await apiFetch('/auth/register', '', {
     method: 'POST',
     body: JSON.stringify({ email, password }),
+  }, true)
+  const result = await response.json() as RegistrationResult
+  if (!result.verification_required) authState.principal = result
+  authState.error = ''
+  return result
+}
+
+export async function verifyEmail(token: string): Promise<CurrentPrincipal> {
+  const response = await apiFetch('/auth/verify-email', '', {
+    method: 'POST',
+    body: JSON.stringify({ token }),
   }, true)
   const principal = await response.json() as CurrentPrincipal
   authState.principal = principal
   authState.error = ''
   return principal
+}
+
+export async function resendVerificationEmail(email: string): Promise<void> {
+  await apiFetch('/auth/resend-verification', '', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  }, true)
 }
 
 export async function logoutCurrentPrincipal(): Promise<void> {

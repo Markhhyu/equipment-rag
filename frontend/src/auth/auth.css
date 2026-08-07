@@ -13,6 +13,17 @@
 .auth-switch a { margin-left: 5px; color: #335cff; font-weight: 650; text-decoration: none; }
 .auth-disabled { min-height: 116px; display: grid; place-items: center; align-content: center; gap: 10px; border: 1px dashed #d8dee9; border-radius: 8px; color: #697388; background: #f8f9fb; }
 .auth-disabled .el-icon { font-size: 22px; }
+.verification-state { min-height: 150px; display: grid; place-items: center; align-content: center; gap: 12px; border: 1px solid #dce4f3; border-radius: 8px; color: #54627a; background: #f7f9fd; }
+.verification-state > .el-icon { color: #335cff; font-size: 25px; }
+.verification-panel { min-height: 420px; }
+.verification-result { min-height: 260px; display: grid; place-items: center; align-content: center; text-align: center; }
+.verification-result-icon { width: 50px; height: 50px; display: grid; place-items: center; border-radius: 8px; color: #335cff; font-size: 27px; background: #edf1ff; }
+.verification-result.success .verification-result-icon { color: #11875d; background: #e9f7f1; }
+.verification-result.error .verification-result-icon { color: #c73c43; background: #fff0f0; }
+.verification-result h1 { margin: 18px 0 0; font-size: 22px; letter-spacing: 0; }
+.verification-result p { min-height: 22px; margin: 9px 0 20px; color: #7a8498; font-size: 13px; }
+.verification-command { min-height: 38px; padding: 0 15px; display: inline-flex; align-items: center; gap: 6px; border: 1px solid #d7dce6; border-radius: 6px; color: #455168; text-decoration: none; }
+.verification-command.primary { border-color: #335cff; color: #fff; background: #335cff; }
 
 @media (max-width: 480px) {
   .auth-page { padding: 18px 14px; align-items: start; }

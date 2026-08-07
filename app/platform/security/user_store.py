@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import Any
 
-from pymongo import ASCENDING, MongoClient
+from pymongo import ASCENDING, MongoClient, ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 
@@ -30,10 +30,14 @@ class MongoUserStore:
         db = client[database]
         self._users = db["auth_users"]
         self._sessions = db["auth_sessions"]
+        self._email_verifications = db["auth_email_verifications"]
         self._users.create_index([("email_normalized", ASCENDING)], unique=True)
         self._sessions.create_index([("token_hash", ASCENDING)], unique=True)
         self._sessions.create_index([("expires_at", ASCENDING)], expireAfterSeconds=0)
         self._sessions.create_index([("user_id", ASCENDING), ("created_at", ASCENDING)])
+        self._email_verifications.create_index([("token_hash", ASCENDING)], unique=True)
+        self._email_verifications.create_index([("expires_at", ASCENDING)], expireAfterSeconds=0)
+        self._email_verifications.create_index([("user_id", ASCENDING)])
 
     def create_user(
         self,
@@ -42,6 +46,7 @@ class MongoUserStore:
         password_hash: str,
         tenant_id: str,
         roles: frozenset[str],
+        status: str = "active",
     ) -> dict[str, Any]:
         now = _now()
         user = {
@@ -51,7 +56,8 @@ class MongoUserStore:
             "password_hash": password_hash,
             "tenant_id": tenant_id,
             "roles": sorted(roles),
-            "status": "active",
+            "status": status,
+            "email_verified_at": now if status == "active" else None,
             "created_at": now,
             "updated_at": now,
             "last_login_at": None,
@@ -72,6 +78,34 @@ class MongoUserStore:
             {"user_id": user_id, "status": "active"},
             {"$set": {"last_login_at": now, "updated_at": now}},
         )
+
+    def create_email_verification(self, user_id: str, ttl_seconds: int) -> str:
+        token = secrets.token_urlsafe(32)
+        now = _now()
+        self._email_verifications.delete_many({"user_id": user_id})
+        self._email_verifications.insert_one(
+            {
+                "token_hash": _token_hash(token),
+                "user_id": user_id,
+                "created_at": now,
+                "expires_at": now + timedelta(seconds=ttl_seconds),
+            }
+        )
+        return token
+
+    def verify_email(self, token: str) -> dict[str, Any] | None:
+        verification = self._email_verifications.find_one_and_delete(
+            {"token_hash": _token_hash(token), "expires_at": {"$gt": _now()}},
+        )
+        if not verification:
+            return None
+        now = _now()
+        user = self._users.find_one_and_update(
+            {"user_id": verification["user_id"], "status": "pending_verification"},
+            {"$set": {"status": "active", "email_verified_at": now, "updated_at": now}},
+            return_document=ReturnDocument.AFTER,
+        )
+        return self._public_user(user) if user else None
 
     def create_session(self, user_id: str, ttl_seconds: int) -> str:
         token = secrets.token_urlsafe(32)

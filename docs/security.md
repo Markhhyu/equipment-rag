@@ -60,10 +60,27 @@ APP_ENVIRONMENT=production
 AUTH_MODE=password
 AUTH_REGISTRATION_ENABLED=true
 AUTH_REGISTRATION_TENANT_ID=public
+AUTH_EMAIL_VERIFICATION_REQUIRED=true
+AUTH_EMAIL_VERIFICATION_TTL_SECONDS=1800
+AUTH_PUBLIC_BASE_URL=https://agent.example.com
 AUTH_SESSION_TTL_SECONDS=604800
 AUTH_COOKIE_SECURE=true
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USERNAME=REPLACE_WITH_SMTP_USER
+SMTP_PASSWORD=REPLACE_WITH_SMTP_SECRET
+SMTP_FROM_ADDRESS=noreply@example.com
+SMTP_SECURITY=starttls
 CORS_ALLOWED_ORIGINS=https://agent.example.com
 ```
+
+Production startup rejects public registration unless email verification is
+enabled. Verification tokens are random, single-use, expire automatically, and
+are stored in MongoDB only as SHA-256 hashes. Requesting a new link invalidates
+the previous link. SMTP delivery runs behind the provider-neutral
+`VerificationEmailSender` interface, so a hosted email API can replace the
+standard SMTP adapter without changing registration or verification routes.
+Never commit `SMTP_PASSWORD`; supply it through the deployment secret manager.
 
 API keys remain available in password mode for service-to-service automation.
 An enterprise deployment can later replace password authentication with its
@@ -71,10 +88,9 @@ OIDC or identity-aware gateway while preserving the server-controlled
 `Principal` contract. Infrastructure consoles and Swagger must also be protected
 at the gateway or kept on private networks; hiding their links is insufficient.
 
-Open registration does not yet prove ownership of the submitted address. Before
-advertising a deployment on the public Internet, connect the planned email
-verification provider and add gateway-level bot protection. Until then, keep
-registration limited to a controlled audience or disabled.
+Email verification proves control of the submitted inbox, but it does not stop
+automated registrations. Public deployments should still add gateway-level bot
+protection and abuse monitoring.
 
 ## Tenant boundaries
 

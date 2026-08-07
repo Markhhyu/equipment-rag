@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any
+from urllib.parse import urlparse
 
 
 _TENANT_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$")
@@ -53,6 +54,16 @@ class SecurityConfig:
     api_keys: tuple[ApiKeyIdentity, ...]
     registration_enabled: bool
     registration_tenant_id: str
+    email_verification_required: bool
+    email_verification_ttl_seconds: int
+    public_base_url: str
+    smtp_host: str
+    smtp_port: int
+    smtp_username: str
+    smtp_password: str = field(repr=False)
+    smtp_from_address: str
+    smtp_security: str
+    smtp_timeout_seconds: int
     session_ttl_seconds: int
     session_cookie_secure: bool
     cors_allowed_origins: tuple[str, ...]
@@ -141,6 +152,20 @@ def load_security_config() -> SecurityConfig:
     registration_enabled = _as_bool("AUTH_REGISTRATION_ENABLED", False)
     if registration_enabled and auth_mode != "password":
         raise ValueError("AUTH_REGISTRATION_ENABLED requires AUTH_MODE=password")
+    email_verification_required = _as_bool("AUTH_EMAIL_VERIFICATION_REQUIRED", False)
+    if email_verification_required and not registration_enabled:
+        raise ValueError("AUTH_EMAIL_VERIFICATION_REQUIRED requires AUTH_REGISTRATION_ENABLED=true")
+    public_base_url = (os.getenv("AUTH_PUBLIC_BASE_URL") or "http://127.0.0.1:8080").strip().rstrip("/")
+    parsed_public_url = urlparse(public_base_url)
+    if parsed_public_url.scheme not in {"http", "https"} or not parsed_public_url.netloc:
+        raise ValueError("AUTH_PUBLIC_BASE_URL must be an absolute HTTP(S) URL")
+    smtp_host = (os.getenv("SMTP_HOST") or "").strip()
+    smtp_from_address = (os.getenv("SMTP_FROM_ADDRESS") or "").strip()
+    smtp_security = (os.getenv("SMTP_SECURITY") or "starttls").strip().lower()
+    if smtp_security not in {"none", "starttls", "ssl"}:
+        raise ValueError("SMTP_SECURITY must be 'none', 'starttls', or 'ssl'")
+    if email_verification_required and (not smtp_host or not smtp_from_address):
+        raise ValueError("Email verification requires SMTP_HOST and SMTP_FROM_ADDRESS")
 
     config = SecurityConfig(
         environment=environment,
@@ -148,6 +173,16 @@ def load_security_config() -> SecurityConfig:
         api_keys=api_keys,
         registration_enabled=registration_enabled,
         registration_tenant_id=registration_tenant_id,
+        email_verification_required=email_verification_required,
+        email_verification_ttl_seconds=_positive_int("AUTH_EMAIL_VERIFICATION_TTL_SECONDS", 30 * 60),
+        public_base_url=public_base_url,
+        smtp_host=smtp_host,
+        smtp_port=_positive_int("SMTP_PORT", 465 if smtp_security == "ssl" else 587),
+        smtp_username=(os.getenv("SMTP_USERNAME") or "").strip(),
+        smtp_password=os.getenv("SMTP_PASSWORD") or "",
+        smtp_from_address=smtp_from_address,
+        smtp_security=smtp_security,
+        smtp_timeout_seconds=_positive_int("SMTP_TIMEOUT_SECONDS", 10),
         session_ttl_seconds=_positive_int("AUTH_SESSION_TTL_SECONDS", 7 * 24 * 60 * 60),
         session_cookie_secure=_as_bool("AUTH_COOKIE_SECURE", environment in {"prod", "production"}),
         cors_allowed_origins=cors_origins,
@@ -164,6 +199,10 @@ def load_security_config() -> SecurityConfig:
         raise ValueError("Production startup requires AUTH_MODE=api_key or AUTH_MODE=password")
     if config.production and config.auth_mode == "password" and not config.session_cookie_secure:
         raise ValueError("Production password authentication requires AUTH_COOKIE_SECURE=true")
+    if config.production and config.registration_enabled and not config.email_verification_required:
+        raise ValueError("Production public registration requires AUTH_EMAIL_VERIFICATION_REQUIRED=true")
+    if config.production and config.registration_enabled and parsed_public_url.scheme != "https":
+        raise ValueError("Production public registration requires an HTTPS AUTH_PUBLIC_BASE_URL")
     if config.production and config.minio_public_read:
         raise ValueError("Production startup requires MINIO_PUBLIC_READ=false")
     return config
