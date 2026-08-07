@@ -36,7 +36,8 @@ Each JSONL case supports:
 
 - `id`, `query`
 - `required_terms`, `forbidden_terms`
-- `expected_source_ids`
+- `expected_source_ids`: runtime Chunk IDs, retained for synthetic and legacy fixtures
+- `expected_source_refs`: stable `document_id::version_label` references for real manuals
 - `must_clarify`, `must_review`, `require_citation`
 - `max_latency_ms`
 - `tags`
@@ -52,6 +53,34 @@ Retrieval evaluation reports three complementary metrics:
 
 `must_review` verifies that refusal and high-risk evidence gaps set the structured
 `requires_human_review` response instead of relying only on cautionary wording.
+
+## Real manual baseline
+
+`datasets/manuals.jsonl` contains a small, reviewed baseline derived from the local
+manuals listed below. The PDFs remain under the ignored `doc/` directory and are not
+committed. Import them with the exact document/version metadata before running the
+live evaluation:
+
+| Local PDF | `document_id` | `version_label` | Suggested applicability |
+|---|---|---|---|
+| `万用表RS-12的使用.pdf` | `manual-rs12` | `v170801` | device model `RS-12` |
+| `LJ2268系列用户手册.pdf` | `manual-lj2268` | `v201807` | device model `LJ2268` |
+| `Z26通用机型打印机用户手册（至像）ver02.30-20251029.pdf` | `manual-z26-series` | `v02.30-zhixiang` | equipment version `至像通用机型` |
+| `Z26 MIC机型打印机用户手册（联想）ver02.30-20251029.pdf` | `manual-z26-series` | `v02.30-lenovo-mic` | equipment version `联想MIC机型` |
+
+Publish both Z26 revisions as parallel applicability scopes. Then run:
+
+```bash
+uv run python -m app.evaluation.cli api \
+  --dataset evals/datasets/manuals.jsonl \
+  --config evals/manuals-config.toml \
+  --base-url http://127.0.0.1:8001 \
+  --output-dir build/evaluation-manuals \
+  --fail-on-threshold
+```
+
+The manual configuration requires retrieval precision `1.00`; a Z26 answer that
+mixes the two published scopes therefore fails even when the required words appear.
 
 When API authentication is enabled, pass a dedicated evaluation key with
 `--api-key`. Never commit that key or place it in a dataset/report.

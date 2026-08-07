@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 import requests
 
-from app.evaluation.models import EvalCase, Prediction
+from app.evaluation.models import EvalCase, Prediction, build_source_ref
 
 
 @dataclass
@@ -36,11 +36,24 @@ class QueryApiProvider:
         if not isinstance(retrieved_source_ids, list):
             retrieved_source_ids = None
 
+        retrieved_source_refs = None
+        sources = payload.get("sources")
+        if isinstance(sources, list):
+            retrieved_source_refs = list(
+                dict.fromkeys(
+                    source_ref
+                    for source in sources
+                    if isinstance(source, dict)
+                    and (source_ref := build_source_ref(source.get("document_id"), source.get("version_label")))
+                )
+            )
+
         return Prediction(
             case_id=case.case_id,
             answer=str(payload.get("answer") or ""),
             latency_ms=latency_ms,
             retrieved_source_ids=retrieved_source_ids,
+            retrieved_source_refs=retrieved_source_refs,
             clarified=payload.get("clarified"),
             requires_human_review=payload.get("requires_human_review"),
             trace_id=str(payload.get("trace_id") or "") or None,

@@ -17,6 +17,13 @@ def normalize_text(value: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
 
 
+def contains_term(text: str, term: str) -> bool:
+    """Match exact normalized content while tolerating PDF layout whitespace."""
+    normalized_text = normalize_text(text)
+    normalized_term = normalize_text(term)
+    return normalized_term in normalized_text or normalized_term.replace(" ", "") in normalized_text.replace(" ", "")
+
+
 def _ratio(matches: int, total: int) -> float:
     return 1.0 if total == 0 else matches / total
 
@@ -66,8 +73,8 @@ class CaseMetrics:
 def score_case(case: EvalCase, prediction: Prediction) -> CaseMetrics:
     """用可重复计算的规则评估单条回答，不调用大模型担任裁判。"""
     answer = normalize_text(prediction.answer)
-    required_matches = sum(normalize_text(term) in answer for term in case.required_terms)
-    forbidden_matches = sum(normalize_text(term) in answer for term in case.forbidden_terms)
+    required_matches = sum(contains_term(answer, term) for term in case.required_terms)
+    forbidden_matches = sum(contains_term(answer, term) for term in case.forbidden_terms)
 
     clarified = prediction.clarified
     if clarified is None:
@@ -79,10 +86,14 @@ def score_case(case: EvalCase, prediction: Prediction) -> CaseMetrics:
     retrieval_recall = None
     retrieval_precision = None
     retrieval_mrr = None
-    if prediction.retrieved_source_ids is not None:
-        # 只有API真正返回了召回文档ID时才计算检索指标，绝不使用答案文本伪造召回结果。
-        expected = set(case.expected_source_ids)
-        retrieved_list = prediction.retrieved_source_ids
+    expected_source_keys = case.expected_source_refs or case.expected_source_ids
+    retrieved_source_keys = (
+        prediction.retrieved_source_refs if case.expected_source_refs else prediction.retrieved_source_ids
+    )
+    if retrieved_source_keys is not None:
+        # 真实手册优先使用document_id::version_label稳定引用；旧数据集继续兼容Chunk ID。
+        expected = set(expected_source_keys)
+        retrieved_list = retrieved_source_keys
         retrieved = set(retrieved_list)
         matches = len(expected & retrieved)
         retrieval_recall = _ratio(matches, len(expected))
@@ -101,7 +112,7 @@ def score_case(case: EvalCase, prediction: Prediction) -> CaseMetrics:
     citation_pass = 1.0
     if case.require_citation:
         # 引用既可以是期望来源 ID，也可以是可识别的 URL 或引用标记。
-        expected_id_is_cited = any(normalize_text(source_id) in answer for source_id in case.expected_source_ids)
+        expected_id_is_cited = any(contains_term(answer, source_id) for source_id in expected_source_keys)
         citation_pass = float(expected_id_is_cited or bool(_CITATION_PATTERN.search(prediction.answer)))
 
     latency_pass = None
