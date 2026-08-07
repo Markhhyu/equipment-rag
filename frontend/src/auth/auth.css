@@ -13,6 +13,13 @@
 .auth-switch a { margin-left: 5px; color: #335cff; font-weight: 650; text-decoration: none; }
 .auth-disabled { min-height: 116px; display: grid; place-items: center; align-content: center; gap: 10px; border: 1px dashed #d8dee9; border-radius: 8px; color: #697388; background: #f8f9fb; }
 .auth-disabled .el-icon { font-size: 22px; }
+.oauth-actions { display: grid; }
+.oauth-button { min-height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid #25292e; border-radius: 6px; color: #fff; font-size: 14px; font-weight: 650; text-decoration: none; background: #25292e; transition: background-color 0.16s ease, border-color 0.16s ease; }
+.oauth-button:hover { border-color: #3b4148; background: #3b4148; }
+.oauth-button .el-icon { font-size: 17px; }
+.auth-divider { height: 39px; display: flex; align-items: center; color: #8a93a5; font-size: 12px; }
+.auth-divider::before, .auth-divider::after { height: 1px; flex: 1; background: #e3e7ee; content: ''; }
+.auth-divider span { padding: 0 12px; }
 .verification-state { min-height: 150px; display: grid; place-items: center; align-content: center; gap: 12px; border: 1px solid #dce4f3; border-radius: 8px; color: #54627a; background: #f7f9fd; }
 .verification-state > .el-icon { color: #335cff; font-size: 25px; }
 .verification-panel { min-height: 420px; }

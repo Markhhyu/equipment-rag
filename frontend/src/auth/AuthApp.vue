@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Hide, Lock, Message, View } from '@element-plus/icons-vue'
+import { Connection, Hide, Lock, Message, View } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -25,6 +25,7 @@ const pendingEmail = ref('')
 const resending = ref(false)
 const isRegister = computed(() => route.path === '/register')
 const registrationEnabled = computed(() => Boolean(authState.config?.registration_enabled))
+const githubEnabled = computed(() => Boolean(authState.config?.oauth_providers.includes('github')))
 const formComplete = computed(() => Boolean(
   email.value.trim()
   && password.value
@@ -37,6 +38,18 @@ function safeRedirect(): string {
     return '/apps'
   }
   return value
+}
+
+const githubLoginUrl = computed(() => (
+  `/auth/oauth/github/start?${new URLSearchParams({ redirect: safeRedirect() }).toString()}`
+))
+
+const oauthErrorMessages: Record<string, string> = {
+  invalid_state: 'GitHub 登录状态已失效，请重新尝试',
+  access_denied: '已取消 GitHub 授权',
+  provider_failed: 'GitHub 登录失败，请确认账号存在已验证邮箱',
+  identity_conflict: '该账号已关联其他 GitHub 身份',
+  account_unavailable: '该账号当前不可用，请联系管理员',
 }
 
 async function submit(): Promise<void> {
@@ -78,6 +91,13 @@ async function resend(): Promise<void> {
 
 onMounted(async () => {
   try {
+    const oauthError = typeof route.query.oauth_error === 'string' ? route.query.oauth_error : ''
+    if (oauthError) {
+      ElMessage.error(oauthErrorMessages[oauthError] || 'GitHub 登录失败，请重新尝试')
+      const query = { ...route.query }
+      delete query.oauth_error
+      await router.replace({ path: route.path, query })
+    }
     const config = await loadAuthConfig()
     if (!config.password_login_enabled) {
       ElMessage.warning('当前部署未启用邮箱账号登录')
@@ -112,7 +132,18 @@ onMounted(async () => {
         <el-button :loading="resending" @click="resend">重新发送</el-button>
       </div>
 
-      <form v-else-if="!isRegister || registrationEnabled" class="auth-form" @submit.prevent="submit">
+      <div v-else-if="githubEnabled" class="oauth-actions">
+        <a class="oauth-button" :href="githubLoginUrl">
+          <el-icon><Connection /></el-icon>
+          使用 GitHub 登录
+        </a>
+      </div>
+
+      <div v-if="!verificationSent && githubEnabled && (!isRegister || registrationEnabled)" class="auth-divider">
+        <span>或使用邮箱</span>
+      </div>
+
+      <form v-if="!verificationSent && (!isRegister || registrationEnabled)" class="auth-form" @submit.prevent="submit">
         <label>
           <span>邮箱</span>
           <el-input v-model="email" size="large" type="email" autocomplete="email" placeholder="name@example.com">
@@ -147,7 +178,7 @@ onMounted(async () => {
         </el-button>
       </form>
 
-      <div v-else class="auth-disabled">
+      <div v-else-if="!verificationSent && !githubEnabled" class="auth-disabled">
         <el-icon><Lock /></el-icon>
         <strong>暂未开放邮箱注册</strong>
       </div>

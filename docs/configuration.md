@@ -141,6 +141,29 @@ SMTP_SECURITY=starttls
 HTTPS 前端地址。`SMTP_PASSWORD` 只能写入本地 `.env` 或部署平台的密钥管理服务，不得提交。邮箱验证不等于机器人防护，
 公网部署仍应在网关配置限流、验证码或 WAF 规则。本地受控开发可以保持 `AUTH_EMAIL_VERIFICATION_REQUIRED=false`。
 
+### GitHub 快速登录
+
+代码仓库托管在 GitHub 并不会自动开通 GitHub 登录。每个部署环境需要创建自己的 OAuth App：
+
+1. 进入 GitHub `Settings -> Developer settings -> OAuth Apps -> New OAuth App`。
+2. `Homepage URL` 填项目前端地址，例如 `https://agent.example.com`。
+3. `Authorization callback URL` 填 `https://agent.example.com/auth/oauth/github/callback`。
+4. 创建 Client Secret，将凭据写入本地 `.env` 或部署平台密钥管理。
+
+```env
+AUTH_MODE=password
+AUTH_PUBLIC_BASE_URL=https://agent.example.com
+AUTH_COOKIE_SECURE=true
+AUTH_GITHUB_OAUTH_ENABLED=true
+AUTH_GITHUB_CLIENT_ID=你的GitHubClientID
+AUTH_GITHUB_CLIENT_SECRET=你的GitHubClientSecret
+AUTH_GITHUB_OAUTH_TIMEOUT_SECONDS=10
+```
+
+本地回调可使用 `http://127.0.0.1:8080/auth/oauth/github/callback`。项目只接受 GitHub 已验证邮箱；首次登录固定创建
+`query` 角色用户。如果已存在相同邮箱的本地账号，会关联到原账号并保留原租户和角色。`AUTH_GITHUB_CLIENT_SECRET`
+不得提交到 GitHub。
+
 调用示例：
 
 ```powershell

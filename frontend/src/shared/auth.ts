@@ -10,7 +10,7 @@ export interface CurrentPrincipal {
   roles: AppRole[]
   authenticated: boolean
   email: string
-  auth_type: 'development' | 'api_key' | 'password'
+  auth_type: 'development' | 'api_key' | 'password' | 'oauth'
 }
 
 export interface AuthConfig {
@@ -18,6 +18,7 @@ export interface AuthConfig {
   password_login_enabled: boolean
   registration_enabled: boolean
   email_verification_required: boolean
+  oauth_providers: string[]
 }
 
 export interface PendingEmailVerification {

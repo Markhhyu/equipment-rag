@@ -105,7 +105,7 @@ async function logout(): Promise<void> {
         <a v-if="hasAppRole('query')" class="top-button" :href="applicationPageUrl('/chat', '8001', '/chat.html')">
           <el-icon><ChatDotRound /></el-icon><span class="desktop-label">进入问答</span>
         </a>
-        <button v-if="authState.principal?.auth_type !== 'password'" class="top-button" type="button" title="连接设置" aria-label="连接设置" @click="settingsVisible = true">
+        <button v-if="authState.principal?.auth_type === 'api_key' || authState.principal?.auth_type === 'development'" class="top-button" type="button" title="连接设置" aria-label="连接设置" @click="settingsVisible = true">
           <el-icon><Connection /></el-icon><span class="desktop-label">连接设置</span>
         </button>
         <button v-else class="top-button" type="button" title="退出登录" aria-label="退出登录" @click="logout">

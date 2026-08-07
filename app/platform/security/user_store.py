@@ -24,6 +24,10 @@ class DuplicateEmailError(ValueError):
     pass
 
 
+class OAuthIdentityConflictError(ValueError):
+    pass
+
+
 class MongoUserStore:
     def __init__(self, mongo_url: str, database: str) -> None:
         client = MongoClient(mongo_url, appname="equipment-rag-identity", tz_aware=True)
@@ -31,6 +35,7 @@ class MongoUserStore:
         self._users = db["auth_users"]
         self._sessions = db["auth_sessions"]
         self._email_verifications = db["auth_email_verifications"]
+        self._oauth_identities = db["auth_oauth_identities"]
         self._users.create_index([("email_normalized", ASCENDING)], unique=True)
         self._sessions.create_index([("token_hash", ASCENDING)], unique=True)
         self._sessions.create_index([("expires_at", ASCENDING)], expireAfterSeconds=0)
@@ -38,6 +43,8 @@ class MongoUserStore:
         self._email_verifications.create_index([("token_hash", ASCENDING)], unique=True)
         self._email_verifications.create_index([("expires_at", ASCENDING)], expireAfterSeconds=0)
         self._email_verifications.create_index([("user_id", ASCENDING)])
+        self._oauth_identities.create_index([("provider", ASCENDING), ("subject", ASCENDING)], unique=True)
+        self._oauth_identities.create_index([("provider", ASCENDING), ("user_id", ASCENDING)], unique=True)
 
     def create_user(
         self,
@@ -107,7 +114,61 @@ class MongoUserStore:
         )
         return self._public_user(user) if user else None
 
-    def create_session(self, user_id: str, ttl_seconds: int) -> str:
+    def find_or_create_oauth_user(
+        self,
+        *,
+        provider: str,
+        subject: str,
+        email: str,
+        tenant_id: str,
+        roles: frozenset[str],
+    ) -> dict[str, Any] | None:
+        identity = self._oauth_identities.find_one({"provider": provider, "subject": subject})
+        if identity:
+            user = self._users.find_one({"user_id": identity["user_id"], "status": "active"})
+            return self._public_user(user) if user else None
+
+        now = _now()
+        user = self._users.find_one({"email_normalized": email})
+        if user and user.get("status") not in {"active", "pending_verification"}:
+            return None
+        if user:
+            user = self._users.find_one_and_update(
+                {"user_id": user["user_id"]},
+                {"$set": {"status": "active", "email_verified_at": now, "updated_at": now}},
+                return_document=ReturnDocument.AFTER,
+            )
+        else:
+            try:
+                self.create_user(
+                    email=email,
+                    password_hash="",
+                    tenant_id=tenant_id,
+                    roles=roles,
+                    status="active",
+                )
+            except DuplicateEmailError:
+                pass
+            user = self._users.find_one({"email_normalized": email})
+        if not user:
+            return None
+
+        try:
+            self._oauth_identities.insert_one(
+                {
+                    "provider": provider,
+                    "subject": subject,
+                    "user_id": user["user_id"],
+                    "created_at": now,
+                }
+            )
+        except DuplicateKeyError as exc:
+            existing_identity = self._oauth_identities.find_one({"provider": provider, "subject": subject})
+            if not existing_identity or existing_identity["user_id"] != user["user_id"]:
+                raise OAuthIdentityConflictError("该账号已关联其他 OAuth 身份") from exc
+        return self._public_user(user)
+
+    def create_session(self, user_id: str, ttl_seconds: int, auth_type: str = "password") -> str:
         token = secrets.token_urlsafe(32)
         now = _now()
         self._sessions.insert_one(
@@ -115,6 +176,7 @@ class MongoUserStore:
                 "session_id": uuid.uuid4().hex,
                 "token_hash": _token_hash(token),
                 "user_id": user_id,
+                "auth_type": auth_type,
                 "created_at": now,
                 "expires_at": now + timedelta(seconds=ttl_seconds),
             }
@@ -126,7 +188,11 @@ class MongoUserStore:
         if not session:
             return None
         user = self._users.find_one({"user_id": session["user_id"], "status": "active"})
-        return self._public_user(user) if user else None
+        if not user:
+            return None
+        public_user = self._public_user(user)
+        public_user["auth_type"] = str(session.get("auth_type") or "password")
+        return public_user
 
     def revoke_session(self, token: str) -> None:
         self._sessions.delete_one({"token_hash": _token_hash(token)})

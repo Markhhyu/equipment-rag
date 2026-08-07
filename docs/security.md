@@ -82,6 +82,23 @@ the previous link. SMTP delivery runs behind the provider-neutral
 standard SMTP adapter without changing registration or verification routes.
 Never commit `SMTP_PASSWORD`; supply it through the deployment secret manager.
 
+GitHub OAuth is an optional login provider in password mode. Configure the
+GitHub OAuth App callback as
+`https://agent.example.com/auth/oauth/github/callback`, then enable it with:
+
+```dotenv
+AUTH_GITHUB_OAUTH_ENABLED=true
+AUTH_GITHUB_CLIENT_ID=REPLACE_WITH_GITHUB_CLIENT_ID
+AUTH_GITHUB_CLIENT_SECRET=REPLACE_WITH_GITHUB_CLIENT_SECRET
+```
+
+The callback requires a short-lived HttpOnly state cookie, accepts only verified
+GitHub email addresses, and creates first-time users with the `query` role. A
+matching existing email is linked to that user without changing its tenant or
+roles. OAuth identities are stored separately with unique provider/subject and
+provider/user constraints. Production OAuth callbacks require HTTPS. Never
+commit the client secret.
+
 API keys remain available in password mode for service-to-service automation.
 An enterprise deployment can later replace password authentication with its
 OIDC or identity-aware gateway while preserving the server-controlled

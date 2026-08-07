@@ -1,11 +1,11 @@
 import json
 import warnings
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import pytest
 from fastapi import FastAPI, HTTPException
 
-from app.platform.security import email_sender, user_store
+from app.platform.security import email_sender, oauth, user_store
 from app.platform.security.auth import Principal, authenticate, require_role
 from app.platform.security.config import load_security_config, reset_security_config_for_tests
 from app.platform.security.email_sender import reset_verification_email_sender_for_tests
@@ -20,10 +20,12 @@ def reset_config():
     reset_security_config_for_tests()
     reset_auth_rate_limits_for_tests()
     reset_verification_email_sender_for_tests()
+    oauth.reset_oauth_providers_for_tests()
     yield
     reset_security_config_for_tests()
     reset_auth_rate_limits_for_tests()
     reset_verification_email_sender_for_tests()
+    oauth.reset_oauth_providers_for_tests()
 
 
 def test_local_mode_stays_zero_configuration(monkeypatch):
@@ -98,6 +100,32 @@ def test_production_public_registration_requires_https_verification_url(monkeypa
     monkeypatch.setenv("SMTP_FROM_ADDRESS", "noreply@example.com")
 
     with pytest.raises(ValueError, match="requires an HTTPS AUTH_PUBLIC_BASE_URL"):
+        load_security_config()
+
+
+def test_github_oauth_requires_password_mode_and_credentials(monkeypatch):
+    monkeypatch.setenv("AUTH_MODE", "api_key")
+    monkeypatch.setenv("AUTH_GITHUB_OAUTH_ENABLED", "true")
+    monkeypatch.setenv(
+        "AUTH_API_KEYS_JSON",
+        json.dumps(
+            [
+                {
+                    "id": "automation",
+                    "key": "test-secret-with-more-than-24-characters",
+                    "tenant_id": "public",
+                    "roles": ["query"],
+                }
+            ]
+        ),
+    )
+
+    with pytest.raises(ValueError, match="requires AUTH_MODE=password"):
+        load_security_config()
+
+    reset_security_config_for_tests()
+    monkeypatch.setenv("AUTH_MODE", "password")
+    with pytest.raises(ValueError, match="requires AUTH_GITHUB_CLIENT_ID"):
         load_security_config()
 
 
@@ -233,6 +261,8 @@ class _FakeUserStore:
         self.sessions = {}
         self.verifications = {}
         self.verification_count = 0
+        self.oauth_identities = {}
+        self.session_auth_types = {}
 
     def create_user(self, *, email, password_hash, tenant_id, roles, status="active"):
         if email in self.users:
@@ -273,9 +303,25 @@ class _FakeUserStore:
         user["status"] = "active"
         return {key: value for key, value in user.items() if key != "password_hash"}
 
-    def create_session(self, user_id, ttl_seconds):
+    def find_or_create_oauth_user(self, *, provider, subject, email, tenant_id, roles):
+        user_id = self.oauth_identities.get((provider, subject))
+        if user_id:
+            user = next((item for item in self.users.values() if item["user_id"] == user_id), None)
+            return {key: value for key, value in user.items() if key != "password_hash"} if user else None
+        user = self.users.get(email)
+        if user and user["status"] not in {"active", "pending_verification"}:
+            return None
+        if not user:
+            self.create_user(email=email, password_hash="", tenant_id=tenant_id, roles=roles)
+            user = self.users[email]
+        user["status"] = "active"
+        self.oauth_identities[(provider, subject)] = user["user_id"]
+        return {key: value for key, value in user.items() if key != "password_hash"}
+
+    def create_session(self, user_id, ttl_seconds, auth_type="password"):
         token = f"session-{len(self.sessions) + 1}"
         self.sessions[token] = user_id
+        self.session_auth_types[token] = auth_type
         return token
 
     def find_user_by_session(self, token):
@@ -283,10 +329,13 @@ class _FakeUserStore:
         user = next((item for item in self.users.values() if item["user_id"] == user_id), None)
         if not user or user["status"] != "active":
             return None
-        return {key: value for key, value in user.items() if key != "password_hash"}
+        result = {key: value for key, value in user.items() if key != "password_hash"}
+        result["auth_type"] = self.session_auth_types.get(token, "password")
+        return result
 
     def revoke_session(self, token):
         self.sessions.pop(token, None)
+        self.session_auth_types.pop(token, None)
 
 
 class _FakeVerificationEmailSender:
@@ -315,6 +364,170 @@ class _FailOnceVerificationEmailSender(_FakeVerificationEmailSender):
         super().send_verification(recipient, verification_url, expires_minutes)
 
 
+class _FakeOAuthProvider:
+    name = "github"
+
+    def __init__(self, identity=None, error=None):
+        self.identity = identity or oauth.OAuthIdentity("github", "github-user-42", "user@example.com")
+        self.error = error
+        self.exchange_calls = []
+
+    def authorization_url(self, *, state, redirect_uri):
+        return f"https://github.example/authorize?{urlencode({'state': state, 'redirect_uri': redirect_uri})}"
+
+    def exchange_code(self, *, code, redirect_uri):
+        self.exchange_calls.append({"code": code, "redirect_uri": redirect_uri})
+        if self.error:
+            raise self.error
+        return self.identity
+
+
+def _enable_github_oauth(monkeypatch):
+    monkeypatch.setenv("AUTH_MODE", "password")
+    monkeypatch.setenv("AUTH_GITHUB_OAUTH_ENABLED", "true")
+    monkeypatch.setenv("AUTH_GITHUB_CLIENT_ID", "github-client-id")
+    monkeypatch.setenv("AUTH_GITHUB_CLIENT_SECRET", "github-client-secret")
+    monkeypatch.setenv("AUTH_PUBLIC_BASE_URL", "http://127.0.0.1:8080")
+    monkeypatch.setenv("AUTH_COOKIE_SECURE", "false")
+
+
+def test_github_provider_selects_verified_primary_email(monkeypatch):
+    _enable_github_oauth(monkeypatch)
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    monkeypatch.setattr(oauth.requests, "post", lambda *args, **kwargs: FakeResponse({"access_token": "token"}))
+
+    def fake_get(url, **kwargs):
+        if url.endswith("/user/emails"):
+            return FakeResponse(
+                [
+                    {"email": "unverified@example.com", "verified": False, "primary": True},
+                    {"email": "secondary@example.com", "verified": True, "primary": False},
+                    {"email": "primary@example.com", "verified": True, "primary": True},
+                ]
+            )
+        return FakeResponse({"id": 42})
+
+    monkeypatch.setattr(oauth.requests, "get", fake_get)
+    provider = oauth.GitHubOAuthProvider(load_security_config())
+    authorization = parse_qs(urlparse(provider.authorization_url(state="state", redirect_uri="https://app/callback")).query)
+    assert authorization["client_id"] == ["github-client-id"]
+    assert authorization["state"] == ["state"]
+
+    identity = provider.exchange_code(code="temporary-code", redirect_uri="https://app/callback")
+    assert identity == oauth.OAuthIdentity("github", "42", "primary@example.com")
+
+
+def test_github_oauth_creates_session_for_verified_identity(monkeypatch):
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Using `httpx` with `starlette.testclient` is deprecated")
+        from fastapi.testclient import TestClient
+
+    _enable_github_oauth(monkeypatch)
+    store = _FakeUserStore()
+    provider = _FakeOAuthProvider()
+    monkeypatch.setattr(user_store, "get_user_store", lambda: store)
+    monkeypatch.setattr(oauth, "get_oauth_provider", lambda name: provider if name == "github" else None)
+    app = FastAPI()
+    app.include_router(auth_router)
+    client = TestClient(app)
+
+    assert client.get("/auth/config").json()["oauth_providers"] == ["github"]
+    started = client.get("/auth/oauth/github/start?redirect=/chat", follow_redirects=False)
+    assert started.status_code == 302
+    authorization_url = urlparse(started.headers["location"])
+    state = parse_qs(authorization_url.query)["state"][0]
+    assert "HttpOnly" in started.headers["set-cookie"]
+    assert "SameSite=lax" in started.headers["set-cookie"]
+
+    callback = client.get(
+        "/auth/oauth/github/callback",
+        params={"code": "temporary-code", "state": state},
+        follow_redirects=False,
+    )
+    assert callback.status_code == 302
+    assert callback.headers["location"] == "http://127.0.0.1:8080/chat"
+    assert provider.exchange_calls == [
+        {
+            "code": "temporary-code",
+            "redirect_uri": "http://127.0.0.1:8080/auth/oauth/github/callback",
+        }
+    ]
+    assert len(store.users) == 1
+    assert store.users["user@example.com"]["roles"] == ["query"]
+    current = client.get("/auth/me")
+    assert current.status_code == 200
+    assert current.json()["email"] == "user@example.com"
+    assert current.json()["auth_type"] == "oauth"
+
+
+def test_github_oauth_rejects_invalid_state(monkeypatch):
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Using `httpx` with `starlette.testclient` is deprecated")
+        from fastapi.testclient import TestClient
+
+    _enable_github_oauth(monkeypatch)
+    provider = _FakeOAuthProvider()
+    monkeypatch.setattr(oauth, "get_oauth_provider", lambda name: provider if name == "github" else None)
+    app = FastAPI()
+    app.include_router(auth_router)
+    client = TestClient(app)
+
+    assert client.get("/auth/oauth/github/start", follow_redirects=False).status_code == 302
+    callback = client.get(
+        "/auth/oauth/github/callback",
+        params={"code": "temporary-code", "state": "attacker-state"},
+        follow_redirects=False,
+    )
+    assert callback.status_code == 302
+    assert "oauth_error=invalid_state" in callback.headers["location"]
+    assert provider.exchange_calls == []
+
+
+def test_github_oauth_links_existing_email_instead_of_creating_duplicate(monkeypatch):
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Using `httpx` with `starlette.testclient` is deprecated")
+        from fastapi.testclient import TestClient
+
+    _enable_github_oauth(monkeypatch)
+    store = _FakeUserStore()
+    existing = store.create_user(
+        email="user@example.com",
+        password_hash=hash_password("correct horse battery staple"),
+        tenant_id="existing-tenant",
+        roles=frozenset({"query"}),
+        status="pending_verification",
+    )
+    provider = _FakeOAuthProvider()
+    monkeypatch.setattr(user_store, "get_user_store", lambda: store)
+    monkeypatch.setattr(oauth, "get_oauth_provider", lambda name: provider if name == "github" else None)
+    app = FastAPI()
+    app.include_router(auth_router)
+    client = TestClient(app)
+
+    started = client.get("/auth/oauth/github/start", follow_redirects=False)
+    state = parse_qs(urlparse(started.headers["location"]).query)["state"][0]
+    callback = client.get(
+        "/auth/oauth/github/callback",
+        params={"code": "temporary-code", "state": state},
+        follow_redirects=False,
+    )
+    assert callback.status_code == 302
+    assert len(store.users) == 1
+    assert store.users["user@example.com"]["user_id"] == existing["user_id"]
+    assert store.users["user@example.com"]["tenant_id"] == "existing-tenant"
+    assert store.users["user@example.com"]["status"] == "active"
+
+
 def test_email_registration_login_and_logout(monkeypatch):
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", message="Using `httpx` with `starlette.testclient` is deprecated")
@@ -336,6 +549,7 @@ def test_email_registration_login_and_logout(monkeypatch):
         "password_login_enabled": True,
         "registration_enabled": True,
         "email_verification_required": False,
+        "oauth_providers": [],
     }
 
     registration = client.post(

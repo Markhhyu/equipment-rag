@@ -70,7 +70,7 @@ async def authenticate(
                 roles=frozenset(str(role) for role in user["roles"]),
                 authenticated=True,
                 email=str(user["email"]),
-                auth_type="password",
+                auth_type=str(user.get("auth_type") or "password"),
             )
 
     challenge = "ApiKey" if config.auth_mode == "api_key" else "Session"

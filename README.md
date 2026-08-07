@@ -341,6 +341,7 @@ docker compose up -d --force-recreate import-api query-api
 | Trace | `LANGFUSE_*` | 可选 | 关闭时不需要 Public/Secret Key |
 | 生产鉴权 | `APP_ENVIRONMENT`、`AUTH_MODE`、`AUTH_API_KEYS_JSON`、`AUTH_REGISTRATION_ENABLED` | 生产必需 | 支持 API Key 或邮箱账号，详见安全文档 |
 | 邮箱验证 | `AUTH_EMAIL_VERIFICATION_REQUIRED`、`AUTH_PUBLIC_BASE_URL`、`SMTP_*` | 公开注册必需 | 单次验证链接与通用 SMTP 发送 |
+| GitHub 登录 | `AUTH_GITHUB_OAUTH_ENABLED`、`AUTH_GITHUB_CLIENT_ID`、`AUTH_GITHUB_CLIENT_SECRET` | 可选 | 使用 GitHub 已验证邮箱登录或关联账号 |
 
 ### Docker 地址规则
 
@@ -748,6 +749,7 @@ BGE-M3 与 Reranker 第一次加载需要下载并初始化模型。模型会保
 
 - 设置 `APP_ENVIRONMENT=production`，并选择 `AUTH_MODE=api_key` 或 `AUTH_MODE=password`；
 - 开放邮箱注册时启用邮箱验证，将 `AUTH_PUBLIC_BASE_URL` 设为 HTTPS 前端域名，并通过密钥管理服务注入 SMTP 凭据；
+- 启用 GitHub 登录时为当前部署创建 OAuth App，回调地址为 `https://你的域名/auth/oauth/github/callback`；
 - 为不同工厂或客户分配不同 `tenant_id`；
 - 更换 MongoDB、MinIO、Grafana 和 Langfuse 的本地默认密码；
 - 保持 `MINIO_PUBLIC_READ=false`，通过 HTTPS 域名提供短期签名 URL；

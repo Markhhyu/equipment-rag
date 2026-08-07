@@ -64,6 +64,10 @@ class SecurityConfig:
     smtp_from_address: str
     smtp_security: str
     smtp_timeout_seconds: int
+    github_oauth_enabled: bool
+    github_oauth_client_id: str
+    github_oauth_client_secret: str = field(repr=False)
+    github_oauth_timeout_seconds: int
     session_ttl_seconds: int
     session_cookie_secure: bool
     cors_allowed_origins: tuple[str, ...]
@@ -166,6 +170,13 @@ def load_security_config() -> SecurityConfig:
         raise ValueError("SMTP_SECURITY must be 'none', 'starttls', or 'ssl'")
     if email_verification_required and (not smtp_host or not smtp_from_address):
         raise ValueError("Email verification requires SMTP_HOST and SMTP_FROM_ADDRESS")
+    github_oauth_enabled = _as_bool("AUTH_GITHUB_OAUTH_ENABLED", False)
+    github_oauth_client_id = (os.getenv("AUTH_GITHUB_CLIENT_ID") or "").strip()
+    github_oauth_client_secret = os.getenv("AUTH_GITHUB_CLIENT_SECRET") or ""
+    if github_oauth_enabled and auth_mode != "password":
+        raise ValueError("AUTH_GITHUB_OAUTH_ENABLED requires AUTH_MODE=password")
+    if github_oauth_enabled and (not github_oauth_client_id or not github_oauth_client_secret):
+        raise ValueError("GitHub OAuth requires AUTH_GITHUB_CLIENT_ID and AUTH_GITHUB_CLIENT_SECRET")
 
     config = SecurityConfig(
         environment=environment,
@@ -183,6 +194,10 @@ def load_security_config() -> SecurityConfig:
         smtp_from_address=smtp_from_address,
         smtp_security=smtp_security,
         smtp_timeout_seconds=_positive_int("SMTP_TIMEOUT_SECONDS", 10),
+        github_oauth_enabled=github_oauth_enabled,
+        github_oauth_client_id=github_oauth_client_id,
+        github_oauth_client_secret=github_oauth_client_secret,
+        github_oauth_timeout_seconds=_positive_int("AUTH_GITHUB_OAUTH_TIMEOUT_SECONDS", 10),
         session_ttl_seconds=_positive_int("AUTH_SESSION_TTL_SECONDS", 7 * 24 * 60 * 60),
         session_cookie_secure=_as_bool("AUTH_COOKIE_SECURE", environment in {"prod", "production"}),
         cors_allowed_origins=cors_origins,
@@ -203,6 +218,8 @@ def load_security_config() -> SecurityConfig:
         raise ValueError("Production public registration requires AUTH_EMAIL_VERIFICATION_REQUIRED=true")
     if config.production and config.registration_enabled and parsed_public_url.scheme != "https":
         raise ValueError("Production public registration requires an HTTPS AUTH_PUBLIC_BASE_URL")
+    if config.production and config.github_oauth_enabled and parsed_public_url.scheme != "https":
+        raise ValueError("Production GitHub OAuth requires an HTTPS AUTH_PUBLIC_BASE_URL")
     if config.production and config.minio_public_read:
         raise ValueError("Production startup requires MINIO_PUBLIC_READ=false")
     return config
