@@ -150,6 +150,7 @@ def analyze_import_state(state: dict) -> dict:
     ]
     stored = [chunk for chunk in chunks if isinstance(chunk, dict) and chunk.get("chunk_id") not in (None, "")]
     item_names = [str(chunk.get("item_name") or "").strip() for chunk in chunks if isinstance(chunk, dict)]
+    page_attributed = [chunk for chunk in chunks if isinstance(chunk, dict) and chunk.get("page_numbers")]
     sparse_sizes = [len(chunk.get("sparse_vector") or {}) for chunk in vectorized]
     dense_dimensions = [len(chunk.get("dense_vector") or []) for chunk in vectorized]
 
@@ -179,6 +180,12 @@ def analyze_import_state(state: dict) -> dict:
         "missing_item_name_count": sum(not name for name in item_names),
         "coverage_ratio": _ratio(sum(bool(name) for name in item_names), len(item_names)),
     }
+    attribution = {
+        "expected_count": len(chunks),
+        "attributed_count": len(page_attributed),
+        "coverage_ratio": _ratio(len(page_attributed), len(chunks)),
+        "required": bool(parser["content_list_available"]),
+    }
 
     checks = [
         float(parser["markdown_chars"] > 0),
@@ -207,6 +214,8 @@ def analyze_import_state(state: dict) -> dict:
         recommendations.append("Milvus 入库或主键回填不完整：核对 insert_count、ids 数量与 Collection Schema。")
     if entity["coverage_ratio"] < 1:
         recommendations.append("部分切片缺少设备名称：优化设备识别 Prompt 或增加文件名规则兜底。")
+    if attribution["required"] and attribution["coverage_ratio"] < 1:
+        recommendations.append("部分PDF切片缺少物理页码：检查结构块页码映射，避免引用无法定位原文。")
 
     return {
         "quality_proxy_score": _round(fmean(checks)) if checks else 0.0,
@@ -215,6 +224,7 @@ def analyze_import_state(state: dict) -> dict:
         "embeddings": embeddings,
         "storage": storage,
         "entity": entity,
+        "page_attribution": attribution,
         "recommendations": recommendations,
     }
 

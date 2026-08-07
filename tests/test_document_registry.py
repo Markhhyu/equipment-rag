@@ -77,6 +77,42 @@ def test_publish_is_idempotent_and_records_scope_mapping(registry: InMemoryDocum
     assert len(publish_logs) == 1
 
 
+def test_blocked_import_quality_is_persisted_and_prevents_publish(registry: InMemoryDocumentRegistry):
+    registry.register_import(
+        tenant_id="local",
+        document_id="manual-quality",
+        revision_id="rev-blocked",
+        filename="manual.pdf",
+        publish_requested=True,
+        actor="tester",
+    )
+    version = registry.mark_import_succeeded(
+        "local",
+        "rev-blocked",
+        chunk_count=2,
+        image_count=0,
+        item_names=["EQ-100"],
+        quality_report={"quality_proxy_score": 0.6},
+        quality_gate={"status": "blocked", "publish_allowed": False, "failures": ["向量生成不完整"]},
+        chunk_preview=[{"position": 1, "content": "预览正文"}],
+        actor="tester",
+    )
+
+    assert version["status"] == "draft"
+    assert version["quality_gate"]["status"] == "blocked"
+    assert version["chunk_preview"][0]["content"] == "预览正文"
+    with pytest.raises(ValueError, match="向量生成不完整"):
+        registry.publish_version("local", "manual-quality", "rev-blocked", actor="tester")
+
+
+def test_legacy_version_without_quality_report_remains_publishable(registry: InMemoryDocumentRegistry):
+    _completed_version(registry, "rev-before-quality-gate")
+
+    published = registry.publish_version("local", "manual-a", "rev-before-quality-gate", actor="tester")
+
+    assert published["active_revision_id"] == "rev-before-quality-gate"
+
+
 def test_legacy_import_defaults_to_manufacturer_manual_trust(registry: InMemoryDocumentRegistry):
     _completed_version(registry, "rev-legacy")
 

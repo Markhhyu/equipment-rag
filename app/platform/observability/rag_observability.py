@@ -262,6 +262,7 @@ def score_import_result(final_state: dict) -> dict:
         "embedding_success_ratio": report["embeddings"]["success_ratio"],
         "milvus_storage_ratio": report["storage"]["stored_ratio"],
         "item_name_coverage_ratio": report["entity"]["coverage_ratio"],
+        "page_attribution_ratio": report["page_attribution"]["coverage_ratio"],
     }
     for score_name, value in scores.items():
         langfuse.create_score(

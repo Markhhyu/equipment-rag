@@ -33,6 +33,7 @@ def test_import_quality_report_covers_parser_chunks_vectors_and_storage(monkeypa
                 "dense_vector": [0.1, 0.2],
                 "sparse_vector": {1: 0.5},
                 "chunk_id": "101",
+                "page_numbers": [1],
             }
         ],
     }
@@ -45,6 +46,12 @@ def test_import_quality_report_covers_parser_chunks_vectors_and_storage(monkeypa
     assert report["embeddings"]["success_ratio"] == 1.0
     assert report["storage"]["stored_ratio"] == 1.0
     assert report["entity"]["coverage_ratio"] == 1.0
+    assert report["page_attribution"] == {
+        "expected_count": 1,
+        "attributed_count": 1,
+        "coverage_ratio": 1.0,
+        "required": True,
+    }
 
 
 def test_chunk_report_detects_empty_short_long_and_duplicate_content():

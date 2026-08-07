@@ -15,7 +15,9 @@ from fastapi.staticfiles import StaticFiles
 from app.modules.knowledge.application.image_assets import get_image_asset_tool
 from app.modules.knowledge.application.registry import get_document_registry
 from app.modules.knowledge.domain.document import DocumentStatus
+from app.modules.knowledge.domain.quality import build_chunk_preview, evaluate_import_quality
 from app.modules.ingestion.api.knowledge_routes import router as knowledge_router
+from app.platform.config.knowledge_quality_config import knowledge_quality_config
 from app.platform.storage.minio import get_minio_client, minio_object_uri
 from app.platform.observability.logging import bind_log_context, clear_log_context, logger
 from app.modules.knowledge.domain.trust import normalize_trust_level
@@ -218,6 +220,7 @@ def run_graph_task(
 
             final_state = dict(kb_import_app.get_state(graph_config).values or {})
             quality_report = score_import_result(final_state)
+            quality_gate = evaluate_import_quality(quality_report, knowledge_quality_config)
             if observation is not None:
                 observation.update(
                     output={
@@ -227,6 +230,9 @@ def run_graph_task(
                         "chunks": quality_report["chunks"],
                         "embeddings": quality_report["embeddings"],
                         "storage": quality_report["storage"],
+                        "entity": quality_report["entity"],
+                        "page_attribution": quality_report["page_attribution"],
+                        "quality_gate": quality_gate,
                         "image_enrichment": final_state.get("image_enrichment_summary") or {},
                         "recommendations": quality_report["recommendations"],
                     }
@@ -241,12 +247,16 @@ def run_graph_task(
             )
         )
         image_summary = final_state.get("image_enrichment_summary") or {}
+        chunk_preview = build_chunk_preview(chunks)
         get_document_registry().mark_import_succeeded(
             tenant_id,
             revision_id or task_id,
             chunk_count=len(chunks),
             image_count=int(image_summary.get("total") or 0),
             item_names=item_names,
+            quality_report=quality_report,
+            quality_gate=quality_gate,
+            chunk_preview=chunk_preview,
             actor=actor,
         )
 
@@ -263,8 +273,16 @@ def run_graph_task(
                 "local_file_path": local_file_path,
                 "done_list": get_done_task_list(task_id),
                 "image_enrichment": final_state.get("image_enrichment_summary") or {},
+                "quality_report": quality_report,
+                "quality_gate": quality_gate,
+                "chunk_preview": chunk_preview,
             },
         )
+        if not quality_gate["publish_allowed"]:
+            logger.warning(
+                f"[{task_id}] 导入完成但未通过质量门禁，版本保持草稿："
+                f"{'；'.join(quality_gate['failures'])}"
+            )
         logger.info(f"[{task_id}] LangGraph全流程执行完毕；是否参与查询由知识版本发布状态决定")
         observe_run("import", time.perf_counter() - run_started, "completed", quality_report)
 

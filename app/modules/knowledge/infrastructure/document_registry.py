@@ -22,7 +22,9 @@ from app.modules.knowledge.domain.document import (
     build_applicability_profile,
     legacy_document_identity,
 )
+from app.modules.knowledge.domain.quality import quality_blocks_publish
 from app.modules.knowledge.domain.trust import normalize_trust_level
+
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
@@ -198,6 +200,9 @@ class InMemoryDocumentRegistry(DocumentRegistry):
             names = list(
                 dict.fromkeys(str(value).strip() for value in kwargs.get("item_names", []) if str(value).strip())
             )
+            quality_report = deepcopy(kwargs.get("quality_report") or {})
+            quality_gate = deepcopy(kwargs.get("quality_gate") or {})
+            chunk_preview = [deepcopy(value) for value in kwargs.get("chunk_preview") or [] if isinstance(value, dict)]
             version.update(
                 {
                     "status": VersionStatus.DRAFT.value,
@@ -205,6 +210,9 @@ class InMemoryDocumentRegistry(DocumentRegistry):
                     "chunk_count": max(0, int(kwargs.get("chunk_count") or 0)),
                     "image_count": max(0, int(kwargs.get("image_count") or 0)),
                     "item_names": names,
+                    "quality_report": quality_report,
+                    "quality_gate": quality_gate,
+                    "chunk_preview": chunk_preview,
                     "error": "",
                     "updated_at": _utcnow(),
                 }
@@ -213,9 +221,14 @@ class InMemoryDocumentRegistry(DocumentRegistry):
             document["item_names"] = list(dict.fromkeys((document.get("item_names") or []) + names))
             document["updated_at"] = _utcnow()
             self._audit(
-                tenant_id, version["document_id"], "import_completed", kwargs.get("actor", "system"), revision_id
+                tenant_id,
+                version["document_id"],
+                "import_completed",
+                kwargs.get("actor", "system"),
+                revision_id,
+                {"quality_status": str(quality_gate.get("status") or "not_evaluated")},
             )
-            if version.get("publish_requested"):
+            if version.get("publish_requested") and not quality_blocks_publish(version):
                 return self.publish_version(
                     tenant_id,
                     version["document_id"],
@@ -249,6 +262,9 @@ class InMemoryDocumentRegistry(DocumentRegistry):
                 raise ValueError("版本不属于指定文档")
             if version.get("import_status") != "completed":
                 raise ValueError("只有导入完成的版本才能发布")
+            if quality_blocks_publish(version):
+                failures = "；".join(str(value) for value in version.get("quality_gate", {}).get("failures") or [])
+                raise ValueError(f"版本未通过导入质量门禁，不能发布：{failures or '请查看质量报告'}")
             now = _utcnow()
             applicability_key = str(version.get("applicability_key") or "default")
             if not document.get("active_revisions"):
@@ -488,6 +504,9 @@ class MongoDocumentRegistry(DocumentRegistry):
     def mark_import_succeeded(self, tenant_id: str, revision_id: str, **kwargs) -> dict[str, Any]:
         version = self._required_version(tenant_id, revision_id)
         names = list(dict.fromkeys(str(value).strip() for value in kwargs.get("item_names", []) if str(value).strip()))
+        quality_report = deepcopy(kwargs.get("quality_report") or {})
+        quality_gate = deepcopy(kwargs.get("quality_gate") or {})
+        chunk_preview = [deepcopy(value) for value in kwargs.get("chunk_preview") or [] if isinstance(value, dict)]
         now = _utcnow()
         self.versions.update_one(
             {"tenant_id": tenant_id, "revision_id": revision_id},
@@ -498,6 +517,9 @@ class MongoDocumentRegistry(DocumentRegistry):
                     "chunk_count": max(0, int(kwargs.get("chunk_count") or 0)),
                     "image_count": max(0, int(kwargs.get("image_count") or 0)),
                     "item_names": names,
+                    "quality_report": quality_report,
+                    "quality_gate": quality_gate,
+                    "chunk_preview": chunk_preview,
                     "error": "",
                     "updated_at": now,
                 }
@@ -508,9 +530,14 @@ class MongoDocumentRegistry(DocumentRegistry):
             {"$addToSet": {"item_names": {"$each": names}}, "$set": {"updated_at": now}},
         )
         self._write_audit(
-            tenant_id, version["document_id"], "import_completed", kwargs.get("actor", "system"), revision_id
+            tenant_id,
+            version["document_id"],
+            "import_completed",
+            kwargs.get("actor", "system"),
+            revision_id,
+            {"quality_status": str(quality_gate.get("status") or "not_evaluated")},
         )
-        if version.get("publish_requested"):
+        if version.get("publish_requested") and not quality_blocks_publish({"quality_gate": quality_gate}):
             document = self.publish_version(
                 tenant_id,
                 version["document_id"],
@@ -548,6 +575,9 @@ class MongoDocumentRegistry(DocumentRegistry):
             raise ValueError("版本不属于指定文档")
         if version.get("import_status") != "completed":
             raise ValueError("只有导入完成的版本才能发布")
+        if quality_blocks_publish(version):
+            failures = "；".join(str(value) for value in version.get("quality_gate", {}).get("failures") or [])
+            raise ValueError(f"版本未通过导入质量门禁，不能发布：{failures or '请查看质量报告'}")
         now = _utcnow()
         applicability_key = str(version.get("applicability_key") or "default")
         if not document.get("active_revisions"):

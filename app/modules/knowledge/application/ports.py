@@ -44,6 +44,9 @@ class DocumentRegistry(ABC):
         chunk_count: int,
         image_count: int,
         item_names: Iterable[str],
+        quality_report: dict[str, Any] | None = None,
+        quality_gate: dict[str, Any] | None = None,
+        chunk_preview: Iterable[dict[str, Any]] = (),
         actor: str = "system",
     ) -> dict[str, Any]:
         raise NotImplementedError

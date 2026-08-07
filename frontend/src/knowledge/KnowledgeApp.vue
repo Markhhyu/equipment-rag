@@ -62,6 +62,40 @@ interface KnowledgeVersion {
   site_id: string
   asset_ids: string[]
   trust_level: string
+  quality_report?: KnowledgeQualityReport
+  quality_gate?: KnowledgeQualityGate
+  chunk_preview?: ChunkPreview[]
+}
+
+interface KnowledgeQualityGate {
+  status: 'passed' | 'blocked' | 'disabled'
+  publish_allowed: boolean
+  score: number
+  failures: string[]
+  warnings: string[]
+}
+
+interface KnowledgeQualityReport {
+  quality_proxy_score: number
+  parser?: { markdown_chars?: number; page_count?: number; structured_block_count?: number }
+  chunks?: { count?: number; healthy_length_ratio?: number; duplicate_ratio?: number }
+  embeddings?: { success_ratio?: number }
+  storage?: { stored_ratio?: number }
+  entity?: { coverage_ratio?: number }
+  page_attribution?: { coverage_ratio?: number; required?: boolean }
+  recommendations?: string[]
+}
+
+interface ChunkPreview {
+  position: number
+  title: string
+  parent_title: string
+  part: number
+  item_name: string
+  page_numbers: number[]
+  content_chars: number
+  content: string
+  truncated: boolean
 }
 
 interface AuditLog {
@@ -84,6 +118,8 @@ const detailVisible = ref(false)
 const detailLoading = ref(false)
 const auditVisible = ref(false)
 const auditLogs = ref<AuditLog[]>([])
+const qualityVisible = ref(false)
+const qualityVersion = ref<KnowledgeVersion | null>(null)
 const uploadVisible = ref(false)
 const uploading = ref(false)
 const registeringLegacy = ref(false)
@@ -108,6 +144,9 @@ const statusLabels: Record<string, string> = {
 const trustLabels: Record<string, string> = {
   enterprise_sop: '企业批准 SOP', manufacturer_manual: '厂商手册', internal_reference: '内部参考', external_web: '外部网页',
 }
+const qualityLabels: Record<string, string> = {
+  passed: '质量通过', blocked: '质量阻断', disabled: '门禁关闭',
+}
 
 const auditLabels: Record<string, string> = {
   register_import: '登记导入', import_completed: '导入完成', import_failed: '导入失败',
@@ -125,6 +164,15 @@ function formatDate(value?: string): string {
   if (!value) return '—'
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('zh-CN', { hour12: false })
+}
+
+function formatPercent(value?: number): string {
+  return typeof value === 'number' ? `${Math.round(value * 100)}%` : '—'
+}
+
+function openQuality(version: KnowledgeVersion): void {
+  qualityVersion.value = version
+  qualityVisible.value = true
 }
 
 async function loadDocuments(): Promise<void> {
@@ -434,14 +482,17 @@ onMounted(loadDocuments)
                 <span v-if="version.site_id">厂区 {{ version.site_id }}</span>
                 <i v-if="!version.device_model && !version.equipment_version && !version.software_version && !version.firmware_version && !version.hardware_revision && !version.site_id">通用适用范围</i>
               </div>
-              <div class="version-metrics"><span>可信等级 <b>{{ trustLabels[version.trust_level] ?? '厂商手册' }}</b></span><span>切片 <b>{{ version.chunk_count }}</b></span><span>图片 <b>{{ version.image_count }}</b></span><span>Revision <code>{{ version.revision_id.slice(0, 12) }}</code></span></div>
+              <div class="version-metrics"><span>可信等级 <b>{{ trustLabels[version.trust_level] ?? '厂商手册' }}</b></span><span>切片 <b>{{ version.chunk_count }}</b></span><span>图片 <b>{{ version.image_count }}</b></span><span v-if="version.quality_gate" class="quality-metric" :class="version.quality_gate.status">{{ qualityLabels[version.quality_gate.status] }} <b>{{ formatPercent(version.quality_gate.score) }}</b></span><span>Revision <code>{{ version.revision_id.slice(0, 12) }}</code></span></div>
               <p v-if="version.error" class="version-error">{{ version.error }}</p>
+              <p v-if="version.quality_gate?.status === 'blocked'" class="quality-error">{{ version.quality_gate.failures.join('；') }}</p>
               <div class="version-actions">
-                <button v-if="version.import_status === 'completed' && version.status === 'draft'" class="publish" @click="publishVersion(version)"><el-icon><Check /></el-icon>发布</button>
+                <button v-if="version.import_status === 'completed' && version.status === 'draft' && version.quality_gate?.status !== 'blocked'" class="publish" @click="publishVersion(version)"><el-icon><Check /></el-icon>发布</button>
                 <button v-if="version.import_status === 'completed' && version.status === 'archived'" @click="rollbackVersion(version)"><el-icon><Refresh /></el-icon>回滚到此版本</button>
                 <button v-if="version.import_status === 'completed'" @click="openNewVersion(selected, version)"><el-icon><DocumentAdd /></el-icon>基于此范围导入</button>
+                <button v-if="version.quality_report || version.chunk_preview?.length" @click="openQuality(version)"><el-icon><View /></el-icon>质量与预览</button>
                 <span v-if="version.status === 'active'"><el-icon><Check /></el-icon>当前生效版本</span>
                 <span v-if="version.status === 'importing'"><el-icon class="is-loading"><Loading /></el-icon>正在导入</span>
+                <span v-if="version.quality_gate?.status === 'blocked'" class="quality-blocked"><el-icon><CircleClose /></el-icon>禁止发布</span>
               </div>
             </div>
           </article>
@@ -471,6 +522,35 @@ onMounted(loadDocuments)
     <el-drawer v-model="auditVisible" title="治理操作审计" size="min(520px, 92vw)">
       <div class="audit-list"><article v-for="log in auditLogs" :key="log.audit_id"><span><el-icon><Setting /></el-icon></span><div><strong>{{ auditLabels[log.action] ?? log.action }}</strong><p>{{ log.actor }} · {{ log.revision_id ? log.revision_id.slice(0, 10) : '文档级操作' }}</p><small>{{ formatDate(log.created_at) }}</small></div></article><div v-if="!auditLogs.length" class="governance-empty">暂无审计记录</div></div>
     </el-drawer>
+
+    <el-dialog v-model="qualityVisible" width="min(760px, calc(100vw - 28px))" title="导入质量与切片预览">
+      <div v-if="qualityVersion" class="quality-review">
+        <div class="quality-review-head" :class="qualityVersion.quality_gate?.status ?? 'legacy'">
+          <span><el-icon v-if="qualityVersion.quality_gate?.status === 'blocked'"><CircleClose /></el-icon><el-icon v-else><Check /></el-icon></span>
+          <div><strong>{{ qualityVersion.quality_gate ? qualityLabels[qualityVersion.quality_gate.status] : '历史版本未评估' }}</strong><p>{{ qualityVersion.filename }} · {{ qualityVersion.version_label }}</p></div>
+          <b>{{ formatPercent(qualityVersion.quality_report?.quality_proxy_score) }}</b>
+        </div>
+        <div v-if="qualityVersion.quality_report" class="quality-grid">
+          <div><span>合理长度切片</span><strong>{{ formatPercent(qualityVersion.quality_report.chunks?.healthy_length_ratio) }}</strong></div>
+          <div><span>设备名称覆盖</span><strong>{{ formatPercent(qualityVersion.quality_report.entity?.coverage_ratio) }}</strong></div>
+          <div><span>向量生成</span><strong>{{ formatPercent(qualityVersion.quality_report.embeddings?.success_ratio) }}</strong></div>
+          <div><span>向量入库</span><strong>{{ formatPercent(qualityVersion.quality_report.storage?.stored_ratio) }}</strong></div>
+          <div><span>正文页码覆盖</span><strong>{{ qualityVersion.quality_report.page_attribution?.required ? formatPercent(qualityVersion.quality_report.page_attribution?.coverage_ratio) : '无需页码' }}</strong></div>
+          <div><span>结构块</span><strong>{{ qualityVersion.quality_report.parser?.structured_block_count ?? 0 }}</strong></div>
+        </div>
+        <div v-if="qualityVersion.quality_gate?.failures?.length" class="quality-messages blocked"><strong>发布阻断原因</strong><p v-for="message in qualityVersion.quality_gate.failures" :key="message">{{ message }}</p></div>
+        <div v-if="qualityVersion.quality_report?.recommendations?.length" class="quality-messages"><strong>改进建议</strong><p v-for="message in qualityVersion.quality_report.recommendations" :key="message">{{ message }}</p></div>
+        <div class="preview-heading"><div><strong>切片抽样</strong><span>从文档首尾和中间位置均匀抽取，不包含向量数据</span></div><b>{{ qualityVersion.chunk_preview?.length ?? 0 }} 个样本</b></div>
+        <div v-if="qualityVersion.chunk_preview?.length" class="chunk-preview-list">
+          <article v-for="chunk in qualityVersion.chunk_preview" :key="chunk.position">
+            <header><strong>#{{ chunk.position }} {{ chunk.parent_title || chunk.title || '无标题切片' }}</strong><span v-if="chunk.page_numbers.length">PDF 第 {{ chunk.page_numbers.join('、') }} 页</span></header>
+            <p>{{ chunk.content }}<i v-if="chunk.truncated">…</i></p>
+            <footer><span>{{ chunk.content_chars }} 字符</span><span v-if="chunk.item_name">设备 {{ chunk.item_name }}</span></footer>
+          </article>
+        </div>
+        <div v-else class="preview-empty">该历史版本没有保存切片预览，重新导入后可查看。</div>
+      </div>
+    </el-dialog>
 
     <ApiKeyDialog v-model="settingsVisible" :api-key="apiKey" @save="saveSettings" />
   </div>
