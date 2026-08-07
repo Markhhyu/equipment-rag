@@ -20,7 +20,7 @@ param(
 
     # MinerU 在宿主机监听的端口，必须与根目录 .env 中的 MINERU_API_BASE_URL 对应。
     [ValidateRange(1, 65535)]
-    [int]$MineruPort = 8002
+    [int]$MineruPort = 8003
 )
 
 $ErrorActionPreference = "Stop"

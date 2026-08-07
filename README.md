@@ -262,7 +262,7 @@ docker compose logs --tail 200 import-api query-api
 | Prometheus | <http://127.0.0.1:9090> | 查询原始指标 |
 | Loki | <http://127.0.0.1:3100/ready> | 集中日志存储健康检查 |
 | Alloy | <http://127.0.0.1:12345> | Docker日志采集器状态 |
-| MinerU API | <http://127.0.0.1:8002/docs> | PDF 解析服务；安装后才可访问 |
+| MinerU API | <http://127.0.0.1:8003/docs> | PDF 解析服务；安装后才可访问 |
 
 `8080` 通过同源网关提供 Vue Router 页面并代理三个业务 API，页面刷新不会返回 404。原有 `8000`、`8001`、`8002`
 页面继续保留，便于兼容旧书签和独立调试。端口冲突时修改 `.env` 中的 `*_PORT`，不需要修改源码。
@@ -282,7 +282,7 @@ docker compose logs --tail 200 import-api query-api
 | `-NoAttu` | 只跳过 Milvus 管理页面 |
 | `-NoMineru` | 不解析 PDF，或 MinerU 由其他方式运行 |
 | `-TimeoutSeconds 1200` | 首次下载镜像/模型较慢，延长单服务等待时间 |
-| `-MineruPort 8002` | MinerU 使用了非默认端口 |
+| `-MineruPort 9003` | MinerU 使用了非默认端口 |
 
 示例：
 
@@ -354,7 +354,7 @@ docker compose up -d --force-recreate import-api query-api
 | 应用容器 → MongoDB | `mongo:27017` |
 | 应用容器 → MinIO | `minio:9000` |
 | 应用容器 → Milvus | `milvus:19530` |
-| 应用容器 → 宿主机 MinerU | `host.docker.internal:8002` |
+| 应用容器 → 宿主机 MinerU | `host.docker.internal:8003` |
 | 浏览器 → MinIO | `localhost:9000` 或浏览器可访问的公开域名 |
 | 宿主机 Python → 中间件 | `127.0.0.1:对应端口` |
 
@@ -549,13 +549,13 @@ CPU 首次验证：
 $env:MINERU_MODEL_SOURCE="modelscope"
 $env:MINERU_API_OUTPUT_ROOT="$PWD\output"
 $env:MINERU_API_MAX_CONCURRENT_REQUESTS="1"
-mineru-api --host 127.0.0.1 --port 8002 --enable-vlm-preload false
+mineru-api --host 127.0.0.1 --port 8003 --enable-vlm-preload false
 ```
 
 根目录 `.env` 保持：
 
 ```env
-MINERU_API_BASE_URL=http://host.docker.internal:8002
+MINERU_API_BASE_URL=http://host.docker.internal:8003
 MINERU_BACKEND=pipeline
 MINERU_IMAGE_ANALYSIS=false
 MINERU_LANGUAGE=ch_server

@@ -120,7 +120,7 @@ x-app-environment: &app-environment
   MINIO_PUBLIC_READ: ${MINIO_PUBLIC_READ:-false}
   MINIO_PRESIGNED_URL_TTL_SECONDS: ${MINIO_PRESIGNED_URL_TTL_SECONDS:-3600}
   # 宿主机上独立运行的 MinerU PDF 解析服务。
-  MINERU_API_BASE_URL: ${MINERU_API_BASE_URL:-http://host.docker.internal:8002}
+  MINERU_API_BASE_URL: ${MINERU_API_BASE_URL:-http://host.docker.internal:8003}
   MINERU_API_TOKEN: ${MINERU_API_TOKEN:-}
   MINERU_BACKEND: ${MINERU_BACKEND:-pipeline}
   MINERU_EFFORT: ${MINERU_EFFORT:-high}

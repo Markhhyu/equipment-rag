@@ -79,7 +79,7 @@ def _get_language() -> str:
 
 mineru_config = MineruConfig(
     # 优先读取新配置，旧配置名保留兼容。
-    base_url=(os.getenv("MINERU_API_BASE_URL") or os.getenv("MINERU_BASE_URL") or "http://127.0.0.1:8002").rstrip("/"),
+    base_url=(os.getenv("MINERU_API_BASE_URL") or os.getenv("MINERU_BASE_URL") or "http://127.0.0.1:8003").rstrip("/"),
 
     # 自部署MinerU通常不需要Token，配置为空即可。
     api_token=os.getenv("MINERU_API_TOKEN") or "",

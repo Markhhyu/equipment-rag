@@ -183,7 +183,7 @@ Invoke-RestMethod http://127.0.0.1:8001/history/demo -Headers $headers
 | 应用容器 → MongoDB 容器 | `mongo:27017` |
 | 应用容器 → MinIO 容器 | `minio:9000` |
 | 应用容器 → Milvus 容器 | `milvus:19530` |
-| 应用容器 → 宿主机 MinerU | `host.docker.internal:8002` |
+| 应用容器 → 宿主机 MinerU | `host.docker.internal:8003` |
 | 浏览器 → MinIO | `localhost:9000` 或公开域名 |
 
 所以 Docker 默认配置是：
@@ -193,7 +193,7 @@ MONGO_URL=mongodb://equipment:equipment-local@mongo:27017/equipment_rag?authSour
 MINIO_ENDPOINT=minio:9000
 MINIO_PUBLIC_ENDPOINT=localhost:9000
 MILVUS_URL=http://milvus:19530
-MINERU_API_BASE_URL=http://host.docker.internal:8002
+MINERU_API_BASE_URL=http://host.docker.internal:8003
 ```
 
 直接在宿主机运行 Python 时，才将服务名改成 `127.0.0.1`。
@@ -245,7 +245,7 @@ MINIO_PUBLIC_READ=false
 自部署 `mineru-api` 默认不需要 Token：
 
 ```env
-MINERU_API_BASE_URL=http://host.docker.internal:8002
+MINERU_API_BASE_URL=http://host.docker.internal:8003
 MINERU_API_TOKEN=
 MINERU_BACKEND=pipeline
 MINERU_IMAGE_ANALYSIS=false
