@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, field
 
 import requests
 
@@ -13,6 +14,7 @@ class QueryApiProvider:
     base_url: str
     timeout_seconds: float = 120.0
     api_key: str | None = None
+    session_namespace: str = field(default_factory=lambda: uuid.uuid4().hex)
 
     def predict(self, case: EvalCase) -> Prediction:
         """调用真实查询 API，把在线回答转换为统一的评测预测结构。"""
@@ -21,7 +23,8 @@ class QueryApiProvider:
             f"{self.base_url.rstrip('/')}/query",
             json={
                 "query": case.query,
-                "session_id": f"eval-{case.case_id}",
+                # 每次评测使用独立命名空间，避免上次运行的Mongo会话历史污染当前结果。
+                "session_id": f"eval-{self.session_namespace}-{case.case_id}",
                 "is_stream": False,
             },
             # 评测专用Key只放在HTTP Header，不写入数据集、报告或日志。

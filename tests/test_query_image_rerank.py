@@ -72,6 +72,39 @@ def test_minimum_two_evidence_chunks_survive_score_cliff(monkeypatch):
     assert [document["chunk_id"] for document in result] == ["symbol", "specification"]
 
 
+def test_exact_lookup_preserves_model_header_for_split_spec_table():
+    scored_docs = [
+        {"chunk_id": "values", "text": "机器尺寸：360x270x195 / 360x305x285 / 360x305x335", "score": 0.9},
+        {"chunk_id": "noise", "text": "纸张选项", "score": 0.8},
+        {"chunk_id": "header", "text": "产品型号：LJ2320DN（单功能）", "score": 0.5},
+    ]
+
+    result = node_rerank._preserve_model_identity_document(
+        "Z26联想MIC机型LJ2320DN的机器尺寸是多少？",
+        scored_docs,
+        scored_docs[:2],
+        max_topk=3,
+    )
+
+    assert [item["chunk_id"] for item in result] == ["values", "noise", "header"]
+
+
+def test_model_header_is_not_added_when_selected_evidence_already_names_model():
+    scored_docs = [
+        {"chunk_id": "values", "text": "LJ2320DN机器尺寸为360x270x195", "score": 0.9},
+        {"chunk_id": "header", "text": "产品型号：LJ2320DN（单功能）", "score": 0.5},
+    ]
+
+    result = node_rerank._preserve_model_identity_document(
+        "LJ2320DN的机器尺寸是多少？",
+        scored_docs,
+        scored_docs[:1],
+        max_topk=2,
+    )
+
+    assert result == scored_docs[:1]
+
+
 def test_final_image_fields_are_part_of_langgraph_state():
     """答案节点生成的MinIO引用和签名URL必须能通过LangGraph最终状态返回给API。"""
     assert "image_object_refs" in QueryGraphState.__annotations__

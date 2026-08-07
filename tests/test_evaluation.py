@@ -144,6 +144,8 @@ def test_stable_source_refs_take_precedence_over_runtime_chunk_ids():
 
 
 def test_query_api_provider_builds_deduplicated_source_refs(monkeypatch):
+    requests = []
+
     class Response:
         def raise_for_status(self):
             return None
@@ -158,11 +160,24 @@ def test_query_api_provider_builds_deduplicated_source_refs(monkeypatch):
                 ],
             }
 
-    monkeypatch.setattr("app.evaluation.providers.requests.post", lambda *args, **kwargs: Response())
+    def fake_post(*args, **kwargs):
+        requests.append((args, kwargs))
+        return Response()
 
-    prediction = QueryApiProvider("http://query-api").predict(make_case())
+    monkeypatch.setattr("app.evaluation.providers.requests.post", fake_post)
+
+    provider = QueryApiProvider("http://query-api")
+    prediction = provider.predict(make_case())
 
     assert prediction.retrieved_source_refs == ["manual-z26::v02.30-zhixiang"]
+    assert requests[0][1]["json"]["session_id"] == f"eval-{provider.session_namespace}-case-1"
+
+
+def test_query_api_provider_uses_unique_session_namespace_per_run():
+    first = QueryApiProvider("http://query-api")
+    second = QueryApiProvider("http://query-api")
+
+    assert first.session_namespace != second.session_namespace
 
 
 def test_real_manual_dataset_uses_stable_version_refs():

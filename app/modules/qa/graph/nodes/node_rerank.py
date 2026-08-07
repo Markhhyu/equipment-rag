@@ -1,4 +1,5 @@
 import hashlib
+import re
 import sys
 from typing import Any, Dict, List
 
@@ -17,6 +18,11 @@ RERANK_MAX_TOPK: int = rag_tuning_config.rerank_max_topk
 RERANK_MIN_TOPK: int = rag_tuning_config.rerank_min_topk
 RERANK_GAP_RATIO: float = rag_tuning_config.rerank_gap_ratio
 RERANK_GAP_ABS: float = rag_tuning_config.rerank_gap_abs
+
+_MODEL_TOKEN_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9])([A-Za-z]{1,12}(?:[\s._-]*\d[A-Za-z0-9._-]*))(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
 
 # 本地知识库检索结果在进入Reranker后必须继续保留这些字段。
 # 图片推理节点依赖document_id和image_object_uris定位MongoDB图片资产，不能只保留正文和分数。
@@ -395,6 +401,47 @@ def _preserve_visual_documents(
     return selected_docs
 
 
+def _preserve_model_identity_document(
+    question: str,
+    scored_docs: List[Dict[str, Any]],
+    topk_docs: List[Dict[str, Any]],
+    max_topk: int,
+) -> List[Dict[str, Any]]:
+    """Keep one retrieved model-header chunk when a split specification table lost its column labels."""
+    tokens = [
+        re.sub(r"[^A-Za-z0-9]+", "", match.group(1)).casefold()
+        for match in _MODEL_TOKEN_PATTERN.finditer(question or "")
+    ]
+    tokens = [token for token in dict.fromkeys(tokens) if token]
+    if not tokens or len(topk_docs) >= max_topk:
+        return topk_docs
+
+    # The longest token is normally the concrete model (LJ2320DN), not its family name (Z26).
+    model_token = max(tokens, key=len)
+
+    def contains_model(document: Dict[str, Any]) -> bool:
+        text = re.sub(r"[^A-Za-z0-9]+", "", str(document.get("text") or "")).casefold()
+        return model_token in text
+
+    if any(contains_model(document) for document in topk_docs):
+        return topk_docs
+
+    selected_ids = {id(document) for document in topk_docs}
+    identity_document = next(
+        (
+            document
+            for document in scored_docs
+            if id(document) not in selected_ids and contains_model(document)
+        ),
+        None,
+    )
+    if identity_document is None:
+        return topk_docs
+
+    logger.info(f"精确参数查询补充型号表头证据：model={model_token}，chunk_id={identity_document.get('chunk_id')}")
+    return [*topk_docs, identity_document]
+
+
 def step_3_topk(
     scored_docs: List[Dict[str, Any]],
     *,
@@ -486,6 +533,13 @@ def node_rerank(state):
                 },
             )
             topk_docs = step_3_topk(scored_docs, preserve_image_docs=preserve_image_docs)
+            if str((state.get("retrieval_plan") or {}).get("query_type") or "") == "exact_lookup":
+                topk_docs = _preserve_model_identity_document(
+                    question,
+                    scored_docs,
+                    topk_docs,
+                    min(RERANK_MAX_TOPK, len(scored_docs)),
+                )
             if rerank_observation is not None:
                 rerank_observation.update(
                     output={

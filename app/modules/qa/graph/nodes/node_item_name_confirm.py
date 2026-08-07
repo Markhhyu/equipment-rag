@@ -87,17 +87,39 @@ def _extract_explicit_item_names(query: str) -> List[str]:
     return _unique_strings(names)
 
 
+def _is_model_token_alias(left: str, right: str) -> bool:
+    """Allow alphabetic brand/variant affixes around an exact model token, never numeric drift."""
+    if left == right:
+        return True
+    for base, derived in ((left, right), (right, left)):
+        index = derived.find(base)
+        if index < 0:
+            continue
+        prefix = derived[:index]
+        suffix = derived[index + len(base) :]
+        if (not prefix or prefix.isalpha()) and (not suffix or suffix.isalpha()):
+            return True
+    return False
+
+
 def _is_lexical_alias(extracted_name: str, candidate_name: str) -> bool:
     """
     判断检索候选是否是用户型号的词法别名。
 
     型号token相交是最可靠的依据，例如LJ2268可以命中
-    “LJ2268/LJ2268W激光打印机”。没有型号时，只允许完整名称相等或较长名称包含关系。
+    “LJ2268/LJ2268W激光打印机”。基础型号也允许匹配纯字母品牌前缀或派生后缀，
+    例如LJ2268可以命中LenovoLJ2268、Z26可以命中Z26MIC，
+    但不会把Z2与Z26或LJ2268与LJ22680视为同一型号。
+    没有型号时，只允许完整名称相等或较长名称包含关系。
     """
     extracted_tokens = set(_extract_model_tokens(extracted_name))
     candidate_tokens = set(_extract_model_tokens(candidate_name))
     if extracted_tokens and candidate_tokens:
-        return bool(extracted_tokens & candidate_tokens)
+        return any(
+            _is_model_token_alias(extracted, candidate)
+            for extracted in extracted_tokens
+            for candidate in candidate_tokens
+        )
 
     extracted_normalized = _normalize_item_name(extracted_name)
     candidate_normalized = _normalize_item_name(candidate_name)
@@ -396,10 +418,16 @@ def step_5_align_item_names(query_results: List[Dict]) -> Dict:
             if _is_lexical_alias(extracted_name, str(match.get("item_name") or ""))
         ]
         if lexical_matches:
-            confirmed_name = str(lexical_matches[0].get("item_name") or "").strip()
-            if confirmed_name:
-                confirmed_item_names.append(confirmed_name)
-                logger.info(f"Step 5: 规则A命中（型号/名称词法匹配）-> 确认: {confirmed_name}")
+            # 同一型号可能对应多个受治理适用版本，例如Z26的至像版和联想MIC版。
+            # 此处保留全部词法匹配，让后续版本上下文结合问题中的适用范围选择revision；
+            # 若过早按向量分只取第一名，会稳定地把多版本问题路由到错误手册。
+            lexical_names = [
+                str(match.get("item_name") or "").strip()
+                for match in lexical_matches
+                if str(match.get("item_name") or "").strip()
+            ]
+            confirmed_item_names.extend(lexical_names)
+            logger.info(f"Step 5: 规则A命中（型号/名称词法匹配）-> 保留候选: {lexical_names}")
             continue
 
         # 规则B：用户已经明确输入型号时，候选必须拥有相同型号token。

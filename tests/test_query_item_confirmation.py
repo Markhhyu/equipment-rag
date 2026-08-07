@@ -52,6 +52,32 @@ def test_lj2268_low_vector_score_is_confirmed_by_model_token():
     }
 
 
+def test_shared_model_token_keeps_all_names_for_version_resolution():
+    """同一型号的多个业务版本必须交给版本上下文消歧，不能按向量分提前选第一项。"""
+    result = node_item_name_confirm.step_5_align_item_names(
+        [
+            {
+                "extracted_name": "Z26",
+                "matches": [
+                    {"item_name": "Z26通用机型打印机", "score": 0.91},
+                    {"item_name": "联想Z26MIC机型打印机", "score": 0.86},
+                ],
+            }
+        ]
+    )
+
+    assert result == {
+        "confirmed_item_names": ["Z26通用机型打印机", "联想Z26MIC机型打印机"],
+        "options": [],
+    }
+
+
+def test_model_alias_does_not_merge_numeric_suffixes():
+    assert node_item_name_confirm._is_lexical_alias("LJ2268", "LenovoLJ2268激光打印机") is True
+    assert node_item_name_confirm._is_lexical_alias("Z2", "Z26打印机") is False
+    assert node_item_name_confirm._is_lexical_alias("LJ2268", "LJ22680打印机") is False
+
+
 def test_explicit_pt770_rejects_unrelated_lj2268_candidate():
     """用户写明PT770后，不允许只凭0.682向量分推荐LJ2268。"""
     result = node_item_name_confirm.step_5_align_item_names(
